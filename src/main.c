@@ -58,6 +58,9 @@ int main(int argc, char *argv[])
             free(serverArgument);
             return 1;
         }
+        int server_init_status = init_server(serverArgument);
+        register_server(server_init_status, serverArgument);
+        close(server_init_status);
         free(serverArgument);
     }
     else if (strcmp(argv[1], "recv") == 0)
@@ -75,6 +78,9 @@ int main(int argc, char *argv[])
             free(clientArgument);
             return 1;
         }
+        int client_init_status = init_client(clientArgument);
+        register_client(client_init_status, clientArgument);
+        close(client_init_status);
         free(clientArgument);
     }
     else

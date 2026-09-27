@@ -1,5 +1,6 @@
 #include "lab.h"
 #include "utils.h"
+#include <errno.h>
 
 SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[])
 {
@@ -117,6 +118,10 @@ int init_server(SERVER_ARGUMENT *server)
 int register_server(int fd, SERVER_ARGUMENT *server)
 {
     char init_message[250];
+    char reply[250];
+    struct timeval receive_timeout = {
+        .tv_sec = 1,
+        .tv_usec = 0};
 
     if (session_validator(server->session) == 0)
     {
@@ -124,4 +129,34 @@ int register_server(int fd, SERVER_ARGUMENT *server)
     }
     snprintf(init_message, sizeof(init_message), "HELLO %s send %.3g %.3g %.3g",
              server->session, server->loss, server->corrupt, server->dup);
+
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                   &receive_timeout, sizeof(receive_timeout)) < 0)
+    {
+        perror("Set receive timeout failed");
+        return -1;
+    }
+
+    for (int attempt = 0; attempt < REGISTER_MAX_ATTEMPT; ++attempt)
+    {
+        if (send(fd, init_message, strlen(init_message), 0) < 0)
+        {
+            perror("Send register message failed");
+        }
+
+        ssize_t reply_length = recv(fd, reply, sizeof(reply) - 1, 0);
+        if (reply_length >= 0)
+        {
+            reply[reply_length] = '\0';
+            printf("Server received reply: %s\n", reply);
+            return 0;
+        }
+
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+        {
+            perror("Receive register response failed");
+        }
+    }
+
+    return -1;
 }

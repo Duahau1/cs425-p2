@@ -11,6 +11,8 @@
 
 #define RELAY_PORT 4250
 
+#define REGISTER_MAX_ATTEMPT 5
+
 typedef enum
 {
     DATA,

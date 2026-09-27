@@ -1,5 +1,6 @@
 #include "lab.h"
 #include "utils.h"
+#include <errno.h>
 #include <netdb.h>
 
 CLIENT_ARGUMENT *parse_cl_opt(int argc, char *const argv[])
@@ -102,13 +103,49 @@ int init_client(CLIENT_ARGUMENT *client)
     freeaddrinfo(result);
     return sock_fd;
 }
-int register_client(int fd, CLIENT_ARGUMENT *client)
+
+int register_client(int socket_fd, CLIENT_ARGUMENT *client)
 {
-    char init_message[250];
+    char register_message[250];
+    char reply[250];
+
+    struct timeval receive_timeout = {
+        .tv_sec = 1,
+        .tv_usec = 0};
 
     if (session_validator(client->session) == 0)
     {
         return -1;
     }
-    snprintf(init_message, sizeof(init_message), "HELLO %s recv", client->session);
+    snprintf(register_message, sizeof(register_message), "HELLO %s recv", client->session);
+
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO,
+                   &receive_timeout, sizeof(receive_timeout)) < 0)
+    {
+        perror("Set receive timeout failed");
+        return -1;
+    }
+
+    for (int attempt = 0; attempt < REGISTER_MAX_ATTEMPT; ++attempt)
+    {
+        if (send(socket_fd, register_message, strlen(register_message), 0) < 0)
+        {
+            perror("Send register message failed");
+        }
+
+        ssize_t reply_length = recv(socket_fd, reply, sizeof(reply) - 1, 0);
+        if (reply_length >= 0)
+        {
+            reply[reply_length] = '\0';
+            printf("Client received reply: %s\n", reply);
+            return 0;
+        }
+
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+        {
+            perror("Receive register response failed");
+        }
+    }
+
+    return -1;
 }
