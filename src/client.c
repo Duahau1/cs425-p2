@@ -131,6 +131,7 @@ int register_client(int socket_fd, CLIENT_ARGUMENT *client)
         if (send(socket_fd, register_message, strlen(register_message), 0) < 0)
         {
             perror("Send register message failed");
+            continue;
         }
 
         ssize_t reply_length = recv(socket_fd, reply, sizeof(reply) - 1, 0);

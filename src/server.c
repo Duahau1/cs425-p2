@@ -142,6 +142,7 @@ int register_server(int fd, SERVER_ARGUMENT *server)
         if (send(fd, init_message, strlen(init_message), 0) < 0)
         {
             perror("Send register message failed");
+            continue;
         }
 
         ssize_t reply_length = recv(fd, reply, sizeof(reply) - 1, 0);
