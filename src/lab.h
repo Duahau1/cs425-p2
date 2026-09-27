@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <netdb.h>
 
 #define PAYLOAD_SIZE 1024
 
@@ -42,15 +43,21 @@ typedef struct
     char *file_name;
     int window;
     int timeout;
-    int loss;
-    int corrupt;
-    int dup;
+    double loss;
+    double corrupt;
+    double dup;
     int port;
 } SERVER_ARGUMENT;
 
 CLIENT_ARGUMENT *parse_cl_opt(int argc, char *const argv[]);
 
+int init_client(CLIENT_ARGUMENT *client);
+int register_client(int fd, CLIENT_ARGUMENT *client);
+
 SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[]);
+
+int init_server(SERVER_ARGUMENT *client);
+int register_server(int fd, SERVER_ARGUMENT *server);
 
 #include <stdio.h>
 #include <stdlib.h>

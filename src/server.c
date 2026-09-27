@@ -42,13 +42,13 @@ SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[])
             serverArgument->timeout = atoi(optarg);
             break;
         case 'l':
-            serverArgument->loss = atoi(optarg);
+            serverArgument->loss = strtod(optarg, NULL);
             break;
         case 'c':
-            serverArgument->corrupt = atoi(optarg);
+            serverArgument->corrupt = strtod(optarg, NULL);
             break;
         case 'd':
-            serverArgument->dup = atoi(optarg);
+            serverArgument->dup = strtod(optarg, NULL);
             break;
         case 'p':
             serverArgument->port = atoi(optarg);
@@ -69,4 +69,59 @@ SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[])
     serverArgument->file_name = argv[optind + 1];
 
     return serverArgument;
+}
+
+int init_server(SERVER_ARGUMENT *server)
+{
+    int sock_fd = -1;
+    struct addrinfo resolver;
+    struct addrinfo *result = NULL;
+    struct addrinfo *rp = NULL;
+
+    memset(&resolver, 0, sizeof(resolver));
+    resolver.ai_family = AF_UNSPEC;
+    resolver.ai_socktype = SOCK_DGRAM;
+    resolver.ai_protocol = IPPROTO_UDP;
+
+    char port_string[INET6_ADDRSTRLEN];
+    snprintf(port_string, sizeof(port_string), "%d", server->port);
+    int status = getaddrinfo(server->relay, port_string, &resolver, &result);
+
+    if (status != 0)
+    {
+        fprintf(stderr, "Error: Failed to look up the provided relay address");
+        return 1;
+    }
+
+    for (rp = result; rp != NULL; rp = rp->ai_next)
+    {
+        sock_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sock_fd == -1)
+        {
+            continue;
+        }
+
+        if (connect(sock_fd, rp->ai_addr, rp->ai_addrlen) == 0)
+        {
+            break;
+        }
+
+        close(sock_fd);
+        sock_fd = -1;
+    }
+
+    freeaddrinfo(result);
+    return sock_fd;
+}
+
+int register_server(int fd, SERVER_ARGUMENT *server)
+{
+    char init_message[250];
+
+    if (session_validator(server->session) == 0)
+    {
+        return -1;
+    }
+    snprintf(init_message, sizeof(init_message), "HELLO %s send %.3g %.3g %.3g",
+             server->session, server->loss, server->corrupt, server->dup);
 }

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include "harness/unity.h"
 #include "../src/lab.h"
+#include "../src/utils.h"
 
 void setUp(void)
 {
@@ -53,10 +54,21 @@ void test_parse_ser_opt(void)
   free(arguments);
 }
 
+void test_compute_checksum(void)
+{
+  const uint8_t one_word[] = {0x00, 0x01};
+  const uint8_t odd_length[] = {0x12, 0x34, 0x56};
+
+  TEST_ASSERT_EQUAL_UINT16(0xffff, compute_checksum(NULL, 0));
+  TEST_ASSERT_EQUAL_UINT16(0xfffe, compute_checksum(one_word, sizeof(one_word)));
+  TEST_ASSERT_EQUAL_UINT16(0x97cb, compute_checksum(odd_length, sizeof(odd_length)));
+}
+
 int main(void)
 {
   UNITY_BEGIN();
   RUN_TEST(test_parse_cl_opt);
   RUN_TEST(test_parse_ser_opt);
+  RUN_TEST(test_compute_checksum);
   return UNITY_END();
 }

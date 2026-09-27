@@ -40,11 +40,7 @@ int main(int argc, char *argv[])
     if (strcmp(argv[1], "send") == 0)
     {
         SERVER_ARGUMENT *serverArgument = parse_ser_opt(argc - 1, parser_argv);
-        if (serverArgument == NULL)
-        {
-            printf("Unable to parse send arguments.\n");
-            return 0;
-        }
+
         // printf("send: session=%s, window=%d, timeout=%d, loss=%d, corrupt=%d, dup=%d, port=%d, relay=%s, file=%s\n",
         //        serverArgument->session,
         //        serverArgument->window,
@@ -60,18 +56,13 @@ int main(int argc, char *argv[])
         {
             print_manual();
             free(serverArgument);
-            return 0;
+            return 1;
         }
         free(serverArgument);
     }
     else if (strcmp(argv[1], "recv") == 0)
     {
         CLIENT_ARGUMENT *clientArgument = parse_cl_opt(argc - 1, parser_argv);
-        if (clientArgument == NULL)
-        {
-            printf("Unable to parse recv arguments.\n");
-            return 0;
-        }
         // printf("recv: session=%s, port=%d, relay=%s, file=%s\n",
         //        clientArgument->session,
         //        clientArgument->port,
@@ -82,7 +73,7 @@ int main(int argc, char *argv[])
         {
             print_manual();
             free(clientArgument);
-            return 0;
+            return 1;
         }
         free(clientArgument);
     }
