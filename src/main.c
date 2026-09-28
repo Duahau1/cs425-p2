@@ -41,10 +41,10 @@ int main(int argc, char *argv[])
     {
         SERVER_ARGUMENT *serverArgument = parse_ser_opt(argc - 1, parser_argv);
 
-        // printf("send: session=%s, window=%d, timeout=%d, loss=%d, corrupt=%d, dup=%d, port=%d, relay=%s, file=%s\n",
+        // printf("send: session=%s, window=%d, timeout_ms=%d, loss=%d, corrupt=%d, dup=%d, port=%d, relay=%s, file=%s\n",
         //        serverArgument->session,
         //        serverArgument->window,
-        //        serverArgument->timeout,
+        //        serverArgument->timeout_ms,
         //        serverArgument->loss,
         //        serverArgument->corrupt,
         //        serverArgument->dup,

@@ -174,3 +174,54 @@ int send_packet(int sock_fd, const packet_header *incoming_packet)
     }
     return 0;
 }
+int parse_incoming_packet(const uint8_t *packetPayload, size_t size, packet_header *outputHeader)
+{
+    if (packetPayload == NULL || outputHeader == NULL || size < HEADER_SIZE)
+    {
+        return -1;
+    }
+
+    uint8_t type = packetPayload[0];
+    uint8_t reserved = packetPayload[1];
+
+    if (type > FIN || reserved != 0)
+    {
+        return -1;
+    }
+
+    uint16_t data_length = (uint16_t)(((uint16_t)packetPayload[8] << 8) | packetPayload[9]);
+
+    if (data_length > PAYLOAD_SIZE)
+    {
+        return -1;
+    }
+    if (HEADER_SIZE + data_length != size)
+    {
+        return -1;
+    }
+    if (type != DATA && data_length != 0)
+    {
+        return -1; // Only DATA packets are allowed to carry a payload
+    }
+
+    if (compute_checksum(packetPayload, size) != 0)
+    {
+        return -1;
+    }
+
+    packet_header parsed_data = {
+        .pack_type = type,
+        .data_len = data_length,
+        .seq_num = ((uint32_t)packetPayload[4] << 24) |
+                   ((uint32_t)packetPayload[5] << 16) |
+                   ((uint32_t)packetPayload[6] << 8) |
+                   (uint32_t)packetPayload[7]};
+
+    if (data_length > 0)
+    {
+        memcpy(parsed_data.data, packetPayload + HEADER_SIZE, data_length);
+    }
+
+    *outputHeader = parsed_data;
+    return 0;
+}

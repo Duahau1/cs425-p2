@@ -58,7 +58,7 @@ typedef struct
     char *relay;
     char *file_name;
     int window;
-    int timeout;
+    int timeout_ms;
     double loss;
     double corrupt;
     double dup;
@@ -88,10 +88,10 @@ typedef struct
     uint32_t next;
     int64_t limit_ms;
     unsigned window;
-    unsigned timeout;
+    unsigned timeout_ms;
     int finished;
     int failed;
-
+    unsigned num_timeouts;
     packet_header standby[WINDOW_MAX];
 } server_state;
 
@@ -102,10 +102,11 @@ int register_server(int fd, SERVER_ARGUMENT *server);
 int publish(int fd, SERVER_ARGUMENT *server);
 int process(int fd, CLIENT_ARGUMENT *client);
 int get_remaining_timeout_ms(const client_state *state, int64_t now);
-int parse_incoming_packet(const uint8_t *packetPayload, size_t size, packet_header *outputHeader);
 int consume(int sock_fd, client_state *client_state, packet_header *incoming_packet, FILE *opened_file);
 int send_ack(int sock_fd, packet_header *incoming_packet);
 size_t populate_transmission_window(server_state *state, int64_t now_ms, packet_header *out);
 int flush(int fd, const packet_header *packets, size_t count);
+size_t handle_retransmission_timeout(server_state *state, int64_t now_ms, packet_header *out);
+int handle_valid_ack(server_state *state, const packet_header *header, int64_t now_ms);
 
 #endif // LAB_H

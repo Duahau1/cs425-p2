@@ -43,7 +43,7 @@ void test_parse_ser_opt(void)
   TEST_ASSERT_NOT_NULL(arguments);
   TEST_ASSERT_EQUAL_STRING("server-session", arguments->session);
   TEST_ASSERT_EQUAL_INT(16, arguments->window);
-  TEST_ASSERT_EQUAL_INT(500, arguments->timeout);
+  TEST_ASSERT_EQUAL_INT(500, arguments->timeout_ms);
   TEST_ASSERT_EQUAL_INT(10, arguments->loss);
   TEST_ASSERT_EQUAL_INT(20, arguments->corrupt);
   TEST_ASSERT_EQUAL_INT(30, arguments->dup);

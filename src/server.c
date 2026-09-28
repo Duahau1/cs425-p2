@@ -17,7 +17,7 @@ SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[])
     serverArgument->relay = NULL;
     serverArgument->file_name = NULL;
     serverArgument->window = 8;
-    serverArgument->timeout = TIMEOUT;
+    serverArgument->timeout_ms = TIMEOUT;
     serverArgument->loss = 0;
     serverArgument->corrupt = 0;
     serverArgument->dup = 0;
@@ -40,7 +40,7 @@ SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[])
             serverArgument->window = atoi(optarg);
             break;
         case 'T':
-            serverArgument->timeout = atoi(optarg);
+            serverArgument->timeout_ms = atoi(optarg);
             break;
         case 'l':
             serverArgument->loss = strtod(optarg, NULL);
@@ -165,48 +165,110 @@ int register_server(int fd, SERVER_ARGUMENT *server)
 
 int publish(int fd, SERVER_ARGUMENT *server)
 {
+    int returnCode = 2;
     FILE_METADATA *fileMetadata = read_file(server->file_name);
 
     if (fileMetadata == NULL)
     {
 
-        return 1;
+        return returnCode;
     }
     packet_header packets[WINDOW_MAX];
 
-    server_state *server_state = malloc(sizeof(*server_state));
-    if (server_state == NULL)
+    server_state *current_state = malloc(sizeof(*current_state));
+    if (current_state == NULL)
     {
         perror("Not able to create sever state");
         free(fileMetadata);
-        return 2;
+        return returnCode;
     }
-    if (server->window > WINDOW_MAX || server->window < 1 || server->timeout == 0)
+    if (server->window > WINDOW_MAX || server->window < 1 || server->timeout_ms == 0)
     {
         free(fileMetadata);
-        return 1;
+        return returnCode;
     }
-    memset(server_state, 0, sizeof(*server_state));
+    memset(current_state, 0, sizeof(*current_state));
 
-    server_state->data = fileMetadata->data;
-    server_state->size = fileMetadata->size;
-    server_state->window = server->window;
-    server_state->timeout = server->timeout;
+    current_state->data = fileMetadata->data;
+    current_state->size = fileMetadata->size;
+    current_state->window = server->window;
+    current_state->timeout_ms = server->timeout_ms;
     // Standard Division Rounds Down trick
-    server_state->total_chunks = (uint32_t)((fileMetadata->size + PAYLOAD_SIZE - 1) /
-                                            PAYLOAD_SIZE);
+    current_state->total_chunks = (uint32_t)((fileMetadata->size + PAYLOAD_SIZE - 1) /
+                                             PAYLOAD_SIZE);
     int64_t now = get_time_ms();
-    if (now < 0 || flush(fd, packets, populate_transmission_window(server_state, now, packets)) != 0)
+    if (now < 0 || flush(fd, packets, populate_transmission_window(current_state, now, packets)) != 0)
     {
-        free(server_state);
+        free(current_state);
         free(fileMetadata);
-        return 1;
+        return returnCode;
     }
-
+    while (!current_state->finished && !current_state->failed)
+    {
+        now = get_time_ms();
+        int64_t remaining_time_ms = current_state->limit_ms - now;
+        if (remaining_time_ms <= 0)
+        {
+            size_t count = handle_retransmission_timeout(current_state, now, packets);
+            if (current_state->failed)
+            {
+                fprintf(stderr, "Transfer short circuit after 10 retransmission.\n");
+                break;
+            }
+            if (flush(fd, packets, count) != 0)
+            {
+                break;
+            }
+            continue;
+        }
+        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        int remaining_timeout = poll(&pfd, 1, remaining_time_ms > INT_MAX ? INT_MAX : (int)remaining_time_ms);
+        if (remaining_timeout < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            perror("Idle mode waiting for client ACK");
+            break;
+        }
+        if (remaining_timeout == 0)
+        {
+            continue;
+        }
+        uint8_t payloadBuffer[PAYLOAD_SIZE + PAYLOAD_SIZE];
+        ssize_t receivedBytes = recv(fd, payloadBuffer, sizeof(payloadBuffer), 0);
+        if (receivedBytes < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            perror("Error in receiving data");
+            break;
+        }
+        packet_header incoming_header;
+        int parse_packet = parse_incoming_packet(payloadBuffer, receivedBytes, &incoming_header);
+        if (parse_packet != 0)
+        {
+            continue;
+        }
+        now = get_time_ms();
+        int handledValidAck = handle_valid_ack(current_state, &incoming_header, now);
+        int handleFlush = flush(fd, packets, populate_transmission_window(current_state, now, packets));
+        if (handledValidAck && !current_state->finished && handleFlush != 0)
+        {
+            break;
+        }
+    }
+    if (current_state->finished)
+    {
+        returnCode = 0;
+    }
     free(fileMetadata);
-    free(server_state);
+    free(current_state);
 
-    return 0;
+    return returnCode;
 }
 
 /**
@@ -259,7 +321,7 @@ size_t populate_transmission_window(server_state *state, int64_t now_ms, packet_
         // Start the retransmission timer if this is the oldest unacknowledged packet
         if (state->base == state->next)
         {
-            state->limit_ms = now_ms + state->timeout;
+            state->limit_ms = now_ms + state->timeout_ms;
         }
 
         state->next++;
@@ -280,7 +342,7 @@ size_t populate_transmission_window(server_state *state, int64_t now_ms, packet_
         count++;
 
         // Arm the timeout timer to monitor the FIN packet delivery
-        state->limit_ms = now_ms + state->timeout;
+        state->limit_ms = now_ms + state->timeout_ms;
         state->next++;
     }
 
@@ -297,4 +359,97 @@ int flush(int fd, const packet_header *packets, size_t count)
         }
     }
     return 0;
+}
+
+/**
+ * Manages packet retransmissions when the sliding window timer expires.
+ * Copies all unacknowledged packets to the output buffer and permanently
+ * marks the sender as failed if 10 consecutive attempts pass without progress.
+ *
+ * @param[in,out] state  Pointer to the sender's active state machine tracking object.
+ * @param[in]     now_ms The current system timestamp in milliseconds (from a monotonic clock).
+ * @param[out]    out    An allocated array where unacknowledged packets will be staged for retransmission.
+ * @return               The total number of packets placed into the 'out' array for resending.
+ */
+size_t handle_retransmission_timeout(server_state *state, int64_t now_ms, packet_header *out)
+{
+    // 1. Guard clauses to ensure a timeout actually occurred and data is in flight
+    if (state == NULL || out == NULL || state->failed || state->finished)
+    {
+        return 0;
+    }
+
+    if (state->base == state->next || now_ms < state->limit_ms)
+    {
+        return 0;
+    }
+
+    state->num_timeouts++;
+    if (state->num_timeouts >= 10)
+    {
+        state->failed = 1;
+        return 0;
+    }
+
+    size_t count = 0;
+
+    for (uint32_t seq = state->base; seq < state->next; seq++)
+    {
+        size_t slot_idx = seq % WINDOW_MAX;
+        out[count] = state->standby[slot_idx];
+        count++;
+    }
+
+    state->limit_ms = now_ms + state->timeout_ms;
+
+    return count;
+}
+
+/**
+ * Evaluates an incoming acknowledgment packet. On cumulative progress, slides
+ * the transmission window base, resets the network failure counter, and updates
+ * the retransmission deadline.
+ *
+ * @param[in,out] state  Pointer to the sender's active state machine tracking object.
+ * @param[in]     ack    Pointer to the read-only packet data structure containing the ACK metadata.
+ * @param[in]     now_ms The current system timestamp in milliseconds (from a monotonic clock).
+ * @return               Returns 1 if the ACK was valid and advanced the window state; 0 otherwise.
+ */
+int handle_valid_ack(server_state *state, const packet_header *header, int64_t now_ms)
+{
+    if (state == NULL || header == NULL || state->failed || state->finished)
+    {
+        return 0;
+    }
+
+    if (header->pack_type != ACK || header->data_len != 0)
+    {
+        return 0;
+    }
+
+    if (header->seq_num <= state->base || header->seq_num > state->next)
+    {
+        return 0;
+    }
+
+    state->base = header->seq_num;
+    state->num_timeouts = 0; // Connection is active; reset the failure safety circuit
+
+    uint32_t final_fin_ack_target = state->total_chunks + 1;
+
+    if (state->base == final_fin_ack_target)
+    {
+        state->finished = 1;
+        state->limit_ms = 0;
+    }
+    else if (state->base == state->next)
+    {
+        state->limit_ms = 0;
+    }
+    else
+    {
+        state->limit_ms = now_ms + state->timeout_ms;
+    }
+
+    return 1;
 }

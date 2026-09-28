@@ -154,34 +154,35 @@ int register_client(int socket_fd, CLIENT_ARGUMENT *client)
 
 int process(int fd, CLIENT_ARGUMENT *client)
 {
-    int retVal = 2;
+    int returnCode = 2;
     FILE *file = fopen(client->file_name, "wb");
     if (file == NULL)
     {
         perror("Unable to process file");
-        return 1;
+        return returnCode;
     }
-    client_state *client_state = malloc(sizeof(*client_state));
-    if (client_state == NULL)
+    client_state *current_state = malloc(sizeof(*current_state));
+    if (current_state == NULL)
     {
         perror("Not able to create sever state");
+        free(current_state);
         fclose(file);
-        return 2;
+        return returnCode;
     }
     int64_t now = get_time_ms();
 
-    client_state->last_valid_ms = now;
-    for (;;)
+    current_state->last_valid_ms = now;
+    while (1)
     {
         now = get_time_ms();
-        if (client_state->finished && now >= client_state->linger_time_ms)
+        if (current_state->finished && now >= current_state->linger_time_ms)
         {
-            retVal = 0;
+            returnCode = 0;
             break;
         }
         else
         {
-            if (now - client_state->last_valid_ms >= 30000)
+            if (now - current_state->last_valid_ms >= 30000)
             {
 
                 fprintf(stderr, "Receiver timed outputHeader after 30 seconds idle.\n");
@@ -189,7 +190,7 @@ int process(int fd, CLIENT_ARGUMENT *client)
             }
         }
         struct pollfd pfd = {.fd = fd, .events = POLLIN};
-        int remaining_timeout = get_remaining_timeout_ms(client_state, now);
+        int remaining_timeout = get_remaining_timeout_ms(current_state, now);
         if (remaining_timeout < 0)
         {
             if (errno == EINTR)
@@ -220,12 +221,11 @@ int process(int fd, CLIENT_ARGUMENT *client)
         {
             continue;
         }
-        consume(fd, client_state, &incoming_header, file);
+        consume(fd, current_state, &incoming_header, file);
     }
     fclose(file);
-    free(client_state);
-
-    return 0;
+    free(current_state);
+    return returnCode;
 }
 
 int get_remaining_timeout_ms(const client_state *state, int64_t now)
@@ -257,58 +257,6 @@ int get_remaining_timeout_ms(const client_state *state, int64_t now)
     return (int)remaining;
 }
 
-int parse_incoming_packet(const uint8_t *packetPayload, size_t size, packet_header *outputHeader)
-{
-    if (packetPayload == NULL || outputHeader == NULL || size < HEADER_SIZE)
-    {
-        return -1;
-    }
-
-    uint8_t type = packetPayload[0];
-    uint8_t reserved = packetPayload[1];
-
-    if (type > FIN || reserved != 0)
-    {
-        return -1;
-    }
-
-    uint16_t data_length = (uint16_t)(((uint16_t)packetPayload[8] << 8) | packetPayload[9]);
-
-    if (data_length > PAYLOAD_SIZE)
-    {
-        return -1;
-    }
-    if (HEADER_SIZE + data_length != size)
-    {
-        return -1;
-    }
-    if (type != DATA && data_length != 0)
-    {
-        return -1; // Only DATA packets are allowed to carry a payload
-    }
-
-    if (compute_checksum(packetPayload, size) != 0)
-    {
-        return -1;
-    }
-
-    packet_header parsed_data = {
-        .pack_type = type,
-        .data_len = data_length,
-        .seq_num = ((uint32_t)packetPayload[4] << 24) |
-                   ((uint32_t)packetPayload[5] << 16) |
-                   ((uint32_t)packetPayload[6] << 8) |
-                   (uint32_t)packetPayload[7]};
-
-    if (data_length > 0)
-    {
-        memcpy(parsed_data.data, packetPayload + HEADER_SIZE, data_length);
-    }
-
-    *outputHeader = parsed_data;
-    return 0;
-}
-
 int consume(int sock_fd, client_state *client_state, packet_header *incoming_packet, FILE *opened_file)
 {
     client_state->last_valid_ms = get_time_ms();
@@ -316,7 +264,6 @@ int consume(int sock_fd, client_state *client_state, packet_header *incoming_pac
     // Case 1: In-order DATA packet
     if (client_state->finished == 0 && incoming_packet->pack_type == DATA && incoming_packet->seq_num == client_state->expected)
     {
-        // Write payload to file
         if (incoming_packet->data_len > 0)
         {
             fwrite(incoming_packet->data, 1, incoming_packet->data_len, opened_file);
@@ -327,7 +274,6 @@ int consume(int sock_fd, client_state *client_state, packet_header *incoming_pac
     // Case 2: Out-of-order or duplicate DATA packet
     else if (incoming_packet->pack_type == DATA)
     {
-        // Discard packet payload and send cumulative ACK expected again
         send_ack(sock_fd, incoming_packet);
     }
     // Case 3: In-order FIN packet
