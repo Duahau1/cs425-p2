@@ -15,6 +15,7 @@
 #include <limits.h>
 
 #define PAYLOAD_SIZE 1024U
+#define HEADER_SIZE 10U
 
 #define TIMEOUT 250
 
@@ -39,7 +40,7 @@ typedef struct
     uint16_t seq_num;
     size_t data_len;
     char data[PAYLOAD_SIZE];
-} header;
+} packet_header;
 
 typedef struct
 {
@@ -94,5 +95,9 @@ SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[]);
 int init_server(SERVER_ARGUMENT *client);
 int register_server(int fd, SERVER_ARGUMENT *server);
 int publish(int fd, SERVER_ARGUMENT *server);
-
+int process(int fd, CLIENT_ARGUMENT *client);
+int get_remaining_timeout_ms(const client_state *state, int64_t now);
+int parse_incoming_packet(const uint8_t *packetPayload, size_t size, packet_header *outputHeader);
+int consume(int sock_fd, client_state *client_state, packet_header *incoming_packet, FILE *opened_file);
+int send_ack(int sock_fd, packet_header *incoming_packet);
 #endif // LAB_H

@@ -81,6 +81,7 @@ int main(int argc, char *argv[])
         }
         int client_init_status = init_client(clientArgument);
         register_client(client_init_status, clientArgument);
+        process(client_init_status, clientArgument);
 
         close(client_init_status);
         free(clientArgument);

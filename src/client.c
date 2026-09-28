@@ -184,13 +184,13 @@ int process(int fd, CLIENT_ARGUMENT *client)
             if (now - client_state->last_valid_ms >= 30000)
             {
 
-                fprintf(stderr, "Receiver timed out after 30 seconds idle.\n");
+                fprintf(stderr, "Receiver timed outputHeader after 30 seconds idle.\n");
                 break;
             }
         }
         struct pollfd pfd = {.fd = fd, .events = POLLIN};
-        int ready = get_remaining_timeout_ms(client_state, now);
-        if (ready < 0)
+        int remaining_timeout = get_remaining_timeout_ms(client_state, now);
+        if (remaining_timeout < 0)
         {
             if (errno == EINTR)
             {
@@ -199,14 +199,32 @@ int process(int fd, CLIENT_ARGUMENT *client)
             perror("Idle mode waiting for data");
             break;
         }
-        if (ready == 0)
+        if (remaining_timeout == 0)
         {
             continue;
         }
+        uint8_t payloadBuffer[PAYLOAD_SIZE + PAYLOAD_SIZE];
+        ssize_t receivedBytes = recv(fd, payloadBuffer, sizeof(payloadBuffer), 0);
+        if (receivedBytes < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            perror("Error in receiving data");
+            break;
+        }
+        packet_header incoming_header;
+        int parse_packet = parse_incoming_packet(payloadBuffer, receivedBytes, &incoming_header);
+        if (parse_packet != 0)
+        {
+            continue;
+        }
+        consume(fd, client_state, &incoming_header, file);
     }
-
-    free(client_state);
     fclose(file);
+    free(client_state);
+
     return 0;
 }
 
@@ -237,4 +255,129 @@ int get_remaining_timeout_ms(const client_state *state, int64_t now)
     }
 
     return (int)remaining;
+}
+
+int parse_incoming_packet(const uint8_t *packetPayload, size_t size, packet_header *outputHeader)
+{
+    if (packetPayload == NULL || outputHeader == NULL || size < HEADER_SIZE)
+    {
+        return -1;
+    }
+
+    uint8_t type = packetPayload[0];
+    uint8_t reserved = packetPayload[1];
+
+    if (type > FIN || reserved != 0)
+    {
+        return -1;
+    }
+
+    uint16_t data_length = (uint16_t)(((uint16_t)packetPayload[8] << 8) | packetPayload[9]);
+
+    if (data_length > PAYLOAD_SIZE)
+    {
+        return -1;
+    }
+    if (HEADER_SIZE + data_length != size)
+    {
+        return -1;
+    }
+    if (type != DATA && data_length != 0)
+    {
+        return -1; // Only DATA packets are allowed to carry a payload
+    }
+
+    if (compute_checksum(packetPayload, size) != 0)
+    {
+        return -1;
+    }
+
+    packet_header parsed_data = {
+        .pack_type = type,
+        .data_len = data_length,
+        .seq_num = ((uint32_t)packetPayload[4] << 24) |
+                   ((uint32_t)packetPayload[5] << 16) |
+                   ((uint32_t)packetPayload[6] << 8) |
+                   (uint32_t)packetPayload[7]};
+
+    if (data_length > 0)
+    {
+        memcpy(parsed_data.data, packetPayload + HEADER_SIZE, data_length);
+    }
+
+    *outputHeader = parsed_data;
+    return 0;
+}
+
+int consume(int sock_fd, client_state *client_state, packet_header *incoming_packet, FILE *opened_file)
+{
+    client_state->last_valid_ms = get_time_ms();
+
+    // Case 1: In-order DATA packet
+    if (client_state->finished == 0 && incoming_packet->pack_type == DATA && incoming_packet->seq_num == client_state->expected)
+    {
+        // Write payload to file
+        if (incoming_packet->data_len > 0)
+        {
+            fwrite(incoming_packet->data, 1, incoming_packet->data_len, opened_file);
+        }
+        client_state->expected++;
+        send_ack(sock_fd, incoming_packet);
+    }
+    // Case 2: Out-of-order or duplicate DATA packet
+    else if (incoming_packet->pack_type == DATA)
+    {
+        // Discard packet payload and send cumulative ACK expected again
+        send_ack(sock_fd, incoming_packet);
+    }
+    // Case 3: In-order FIN packet
+    else if (incoming_packet->pack_type == FIN && incoming_packet->seq_num == client_state->expected)
+    {
+        fclose(opened_file);
+        client_state->expected++;
+        send_ack(sock_fd, incoming_packet);
+
+        // Initiate the 2-second linger phase
+        client_state->finished = 1;
+        client_state->linger_time_ms = get_time_ms() + 2000;
+    }
+    // Case 4: Repeated FIN during the linger window
+    else if (incoming_packet->pack_type == FIN && client_state->finished)
+    {
+        // Answer repeated FINs with the exact same ACK to help the sender close cleanly
+        send_ack(sock_fd, incoming_packet);
+    }
+    return 0;
+}
+int send_ack(int sock_fd, packet_header *incoming_packet)
+{
+    // ACK packets contain only the 10-byte header (zero data payload length)
+    uint8_t ack_packet[HEADER_SIZE];
+    size_t totalBytes = HEADER_SIZE + incoming_packet->data_len;
+
+    // Clear out the memory layout entirely (handles padding/reserved fields)
+    memset(ack_packet, 0, sizeof(ack_packet));
+
+    ack_packet[0] = ACK;
+
+    ack_packet[4] = (uint8_t)(incoming_packet->seq_num >> 24);
+    ack_packet[5] = (uint8_t)(incoming_packet->seq_num >> 16);
+    ack_packet[6] = (uint8_t)(incoming_packet->seq_num >> 8);
+    ack_packet[7] = (uint8_t)incoming_packet->seq_num;
+
+    ack_packet[8] = (uint8_t)(incoming_packet->data_len >> 8);
+    ack_packet[9] = (uint8_t)incoming_packet->data_len;
+
+    // 5. Compute the RFC 1071 Checksum with the checksum region initially zeroed out
+    // The compute_checksum function automatically takes the 1s complement.
+    uint16_t checksum = compute_checksum(ack_packet, totalBytes);
+    ack_packet[2] = (uint8_t)(checksum >> 8);
+    ack_packet[3] = (uint8_t)checksum;
+    ssize_t bytes_sent = send(sock_fd, ack_packet, totalBytes, 0);
+    if (bytes_sent < 0)
+    {
+        perror("Failed to send ACK packet");
+        return -1;
+    }
+    return 0;
 }

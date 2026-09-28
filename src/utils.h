@@ -15,7 +15,6 @@ int is_relay_addr_valid(char *relay, int port);
 int session_validator(const char *session);
 
 int64_t get_time_ms(void);
-int wait_for_ack(int fd, uint16_t expected_seq, unsigned timeout_ms);
 
 typedef struct
 {
