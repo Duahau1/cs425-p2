@@ -90,4 +90,5 @@ int main(int argc, char *argv[])
         print_manual();
         return 0;
     }
+    return 0;
 }

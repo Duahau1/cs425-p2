@@ -159,7 +159,7 @@ int register_server(int fd, SERVER_ARGUMENT *server)
             perror("Receive register response failed");
         }
     }
-    fprintf(stderr, "Relay registration exhaust all %s", REGISTER_MAX_ATTEMPT);
+    fprintf(stderr, "Relay registration exhaust all %d", REGISTER_MAX_ATTEMPT);
     return -1;
 }
 

@@ -139,7 +139,7 @@ int register_client(int socket_fd, CLIENT_ARGUMENT *client)
         {
             // TODO: error error
             reply[reply_length] = '\0';
-            printf("Client received reply: %s, with reply_length: %s\n", reply, reply_length);
+            printf("Client received reply: %s, with reply_length: %zd\n", reply, reply_length);
             return 0;
         }
 
@@ -148,7 +148,7 @@ int register_client(int socket_fd, CLIENT_ARGUMENT *client)
             perror("Receive register response failed");
         }
     }
-    fprintf(stderr, "Relay registration exhaust all %s", REGISTER_MAX_ATTEMPT);
+    fprintf(stderr, "Relay registration exhaust all %d", REGISTER_MAX_ATTEMPT);
     return -1;
 }
 
