@@ -137,8 +137,9 @@ int register_client(int socket_fd, CLIENT_ARGUMENT *client)
         ssize_t reply_length = recv(socket_fd, reply, sizeof(reply) - 1, 0);
         if (reply_length >= 0)
         {
+            // TODO: error error
             reply[reply_length] = '\0';
-            printf("Client received reply: %s\n", reply);
+            printf("Client received reply: %s, with reply_length: %s\n", reply, reply_length);
             return 0;
         }
 
@@ -147,6 +148,30 @@ int register_client(int socket_fd, CLIENT_ARGUMENT *client)
             perror("Receive register response failed");
         }
     }
-
+    fprintf(stderr, "Relay registration exhaust all %s", REGISTER_MAX_ATTEMPT);
     return -1;
+}
+
+int process(int fd, CLIENT_ARGUMENT *client)
+{
+    FILE *file = fopen(client->file_name, "wb");
+    if (file == NULL)
+    {
+        perror("Unable to process file");
+        return 1;
+    }
+    client_state *client_state = malloc(sizeof(*client_state));
+    if (client_state == NULL)
+    {
+        perror("Not able to create sever state");
+        fclose(file);
+        return 2;
+    }
+    int64_t now = monotonic_ms();
+
+    client_state->last_valid_ms = now;
+
+    free(client_state);
+    fclose(file);
+    return 0;
 }

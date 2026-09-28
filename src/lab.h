@@ -1,17 +1,26 @@
 #ifndef LAB_H
 #define LAB_H
-
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <signal.h>
+#include <time.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <netdb.h>
 
-#define PAYLOAD_SIZE 1024
+#define PAYLOAD_SIZE 1024U
 
 #define TIMEOUT 250
 
 #define RELAY_PORT 4250
 
 #define REGISTER_MAX_ATTEMPT 5
+
+#define WINDOW_MAX 64U
 
 typedef enum
 {
@@ -51,23 +60,37 @@ typedef struct
     int port;
 } SERVER_ARGUMENT;
 
+typedef struct
+{
+    uint32_t expected;
+    int finished;
+    int64_t last_valid_ms;
+    int64_t linger_time_ms;
+} client_state;
+
 CLIENT_ARGUMENT *parse_cl_opt(int argc, char *const argv[]);
 
 int init_client(CLIENT_ARGUMENT *client);
 int register_client(int fd, CLIENT_ARGUMENT *client);
+int process(int fd, CLIENT_ARGUMENT *client);
+
+typedef struct
+{
+    const uint8_t *data;
+    size_t size;
+    uint32_t total_chunks;
+    uint32_t base;
+    uint32_t next;
+    unsigned window;
+    unsigned timeout;
+    int finished;
+    int failed;
+} server_state;
 
 SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[]);
 
 int init_server(SERVER_ARGUMENT *client);
 int register_server(int fd, SERVER_ARGUMENT *server);
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <signal.h>
-#include <time.h>
+int publish(int fd, SERVER_ARGUMENT *server);
 
 #endif // LAB_H

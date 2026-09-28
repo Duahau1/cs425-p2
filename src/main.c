@@ -60,6 +60,7 @@ int main(int argc, char *argv[])
         }
         int server_init_status = init_server(serverArgument);
         register_server(server_init_status, serverArgument);
+
         close(server_init_status);
         free(serverArgument);
     }
@@ -80,6 +81,7 @@ int main(int argc, char *argv[])
         }
         int client_init_status = init_client(clientArgument);
         register_client(client_init_status, clientArgument);
+
         close(client_init_status);
         free(clientArgument);
     }

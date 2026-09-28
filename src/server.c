@@ -148,6 +148,7 @@ int register_server(int fd, SERVER_ARGUMENT *server)
         ssize_t reply_length = recv(fd, reply, sizeof(reply) - 1, 0);
         if (reply_length >= 0)
         {
+            // TODO: error error
             reply[reply_length] = '\0';
             printf("Server received reply: %s\n", reply);
             return 0;
@@ -158,6 +159,41 @@ int register_server(int fd, SERVER_ARGUMENT *server)
             perror("Receive register response failed");
         }
     }
-
+    fprintf(stderr, "Relay registration exhaust all %s", REGISTER_MAX_ATTEMPT);
     return -1;
+}
+
+int publish(int fd, SERVER_ARGUMENT *server)
+{
+    FILE_METADATA *fileMetadata = read_file(server->file_name);
+
+    if (fileMetadata == NULL)
+    {
+
+        return 1;
+    }
+    server_state *server_state = malloc(sizeof(*server_state));
+    if (server_state == NULL)
+    {
+        perror("Not able to create sever state");
+        free(fileMetadata);
+        return 2;
+    }
+    if (server->window > WINDOW_MAX || server->window < 1 || server->timeout == 0)
+    {
+        free(fileMetadata);
+        return 1;
+    }
+    memset(server_state, 0, sizeof(*server_state));
+
+    server_state->data = fileMetadata->data;
+    server_state->size = fileMetadata->size;
+    server_state->window = server->window;
+    server_state->timeout = server->timeout;
+    // Standard Division Rounds Down trick
+    server_state->total_chunks = (uint32_t)((fileMetadata->size + PAYLOAD_SIZE - 1) /
+                                            PAYLOAD_SIZE);
+
+        free(fileMetadata);
+    return 0;
 }
