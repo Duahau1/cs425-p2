@@ -199,7 +199,7 @@ int publish(int fd, SERVER_ARGUMENT *server)
     return 0;
 }
 
-static int send_batch(int fd, const packet_header *packets, size_t count)
+static int flush(int fd, const packet_header *packets, size_t count)
 {
     for (size_t i = 0; i < count; ++i)
     {
