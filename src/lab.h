@@ -99,5 +99,5 @@ int process(int fd, CLIENT_ARGUMENT *client);
 int get_remaining_timeout_ms(const client_state *state, int64_t now);
 int parse_incoming_packet(const uint8_t *packetPayload, size_t size, packet_header *outputHeader);
 int consume(int sock_fd, client_state *client_state, packet_header *incoming_packet, FILE *opened_file);
-int send_package(int sock_fd, packet_header *incoming_packet);
+int send_ack(int sock_fd, packet_header *incoming_packet);
 #endif // LAB_H

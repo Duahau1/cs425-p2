@@ -4,6 +4,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "lab.h"
+
 #define MAX_SIZE_OF_FILE (16U * 1024U * 1024U)
 
 #define STREQU(a, b) (strcmp(a, b) == 0)
@@ -13,6 +15,8 @@ uint16_t compute_checksum(const uint8_t *data, size_t length);
 int is_relay_addr_valid(char *relay, int port);
 
 int session_validator(const char *session);
+
+int send_packet(int sock_fd, const packet_header *incoming_packet);
 
 int64_t get_time_ms(void);
 

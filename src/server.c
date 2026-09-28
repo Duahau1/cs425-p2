@@ -202,7 +202,11 @@ int publish(int fd, SERVER_ARGUMENT *server)
 static int send_batch(int fd, const packet_header *packets, size_t count)
 {
     for (size_t i = 0; i < count; ++i)
+    {
         if (send_packet(fd, &packets[i]) != 0)
+        {
             return -1;
+        }
+    }
     return 0;
 }

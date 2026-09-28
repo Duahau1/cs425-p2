@@ -10,7 +10,6 @@
 #include <regex.h>
 #include <errno.h>
 #include <poll.h>
-#include "lab.h"
 
 uint16_t compute_checksum(const uint8_t *data, size_t length)
 {
@@ -144,8 +143,10 @@ int64_t get_time_ms(void)
 
     return ((int64_t)ts.tv_sec * MS_PER_SEC) + (ts.tv_nsec / NS_PER_MS);
 }
-
-int send_packet(int sock_fd, packet_header *incoming_packet)
+/**
+ * Send the package
+ */
+int send_packet(int sock_fd, const packet_header *incoming_packet)
 {
     uint8_t ack_packet[HEADER_SIZE];
     size_t totalBytes = HEADER_SIZE + incoming_packet->data_len;
