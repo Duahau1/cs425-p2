@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <netdb.h>
+#include <poll.h>
+#include <limits.h>
 
 #define PAYLOAD_SIZE 1024U
 

@@ -154,6 +154,7 @@ int register_client(int socket_fd, CLIENT_ARGUMENT *client)
 
 int process(int fd, CLIENT_ARGUMENT *client)
 {
+    int retVal = 2;
     FILE *file = fopen(client->file_name, "wb");
     if (file == NULL)
     {
@@ -167,11 +168,73 @@ int process(int fd, CLIENT_ARGUMENT *client)
         fclose(file);
         return 2;
     }
-    int64_t now = monotonic_ms();
+    int64_t now = get_time_ms();
 
     client_state->last_valid_ms = now;
+    for (;;)
+    {
+        now = get_time_ms();
+        if (client_state->finished && now >= client_state->linger_time_ms)
+        {
+            retVal = 0;
+            break;
+        }
+        else
+        {
+            if (now - client_state->last_valid_ms >= 30000)
+            {
+
+                fprintf(stderr, "Receiver timed out after 30 seconds idle.\n");
+                break;
+            }
+        }
+        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        int ready = get_remaining_timeout_ms(client_state, now);
+        if (ready < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            perror("Idle mode waiting for data");
+            break;
+        }
+        if (ready == 0)
+        {
+            continue;
+        }
+    }
 
     free(client_state);
     fclose(file);
     return 0;
+}
+
+int get_remaining_timeout_ms(const client_state *state, int64_t now)
+{
+    if (state == NULL)
+    {
+        return 0;
+    }
+
+    int64_t deadline = state->linger_time_ms;
+    if (!state->finished)
+    {
+        const int64_t INACTIVITY_TIMEOUT_MS = 30000;
+        deadline = state->last_valid_ms + INACTIVITY_TIMEOUT_MS;
+    }
+
+    int64_t remaining = deadline - now;
+    if (remaining <= 0)
+    {
+        return 0;
+    }
+
+    // Safely clamp to INT_MAX to prevent 32-bit truncation errors during type casting
+    if (remaining > INT_MAX)
+    {
+        return INT_MAX;
+    }
+
+    return (int)remaining;
 }
