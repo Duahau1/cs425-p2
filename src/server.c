@@ -193,7 +193,16 @@ int publish(int fd, SERVER_ARGUMENT *server)
     // Standard Division Rounds Down trick
     server_state->total_chunks = (uint32_t)((fileMetadata->size + PAYLOAD_SIZE - 1) /
                                             PAYLOAD_SIZE);
+    int64_t now = get_time_ms();
 
-        free(fileMetadata);
+    free(fileMetadata);
+    return 0;
+}
+
+static int send_batch(int fd, const packet_header *packets, size_t count)
+{
+    for (size_t i = 0; i < count; ++i)
+        if (send_packet(fd, &packets[i]) != 0)
+            return -1;
     return 0;
 }

@@ -322,20 +322,20 @@ int consume(int sock_fd, client_state *client_state, packet_header *incoming_pac
             fwrite(incoming_packet->data, 1, incoming_packet->data_len, opened_file);
         }
         client_state->expected++;
-        send_ack(sock_fd, incoming_packet);
+        send_package(sock_fd, incoming_packet);
     }
     // Case 2: Out-of-order or duplicate DATA packet
     else if (incoming_packet->pack_type == DATA)
     {
         // Discard packet payload and send cumulative ACK expected again
-        send_ack(sock_fd, incoming_packet);
+        send_package(sock_fd, incoming_packet);
     }
     // Case 3: In-order FIN packet
     else if (incoming_packet->pack_type == FIN && incoming_packet->seq_num == client_state->expected)
     {
         fclose(opened_file);
         client_state->expected++;
-        send_ack(sock_fd, incoming_packet);
+        send_package(sock_fd, incoming_packet);
 
         // Initiate the 2-second linger phase
         client_state->finished = 1;
@@ -345,11 +345,11 @@ int consume(int sock_fd, client_state *client_state, packet_header *incoming_pac
     else if (incoming_packet->pack_type == FIN && client_state->finished)
     {
         // Answer repeated FINs with the exact same ACK to help the sender close cleanly
-        send_ack(sock_fd, incoming_packet);
+        send_package(sock_fd, incoming_packet);
     }
     return 0;
 }
-int send_ack(int sock_fd, packet_header *incoming_packet)
+int send_package(int sock_fd, packet_header *incoming_packet)
 {
     // ACK packets contain only the 10-byte header (zero data payload length)
     uint8_t ack_packet[HEADER_SIZE];

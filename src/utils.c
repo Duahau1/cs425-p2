@@ -144,3 +144,32 @@ int64_t get_time_ms(void)
 
     return ((int64_t)ts.tv_sec * MS_PER_SEC) + (ts.tv_nsec / NS_PER_MS);
 }
+
+int send_packet(int sock_fd, packet_header *incoming_packet)
+{
+    uint8_t ack_packet[HEADER_SIZE];
+    size_t totalBytes = HEADER_SIZE + incoming_packet->data_len;
+
+    memset(ack_packet, 0, sizeof(ack_packet));
+
+    ack_packet[0] = incoming_packet->pack_type;
+
+    ack_packet[4] = (uint8_t)(incoming_packet->seq_num >> 24);
+    ack_packet[5] = (uint8_t)(incoming_packet->seq_num >> 16);
+    ack_packet[6] = (uint8_t)(incoming_packet->seq_num >> 8);
+    ack_packet[7] = (uint8_t)incoming_packet->seq_num;
+
+    ack_packet[8] = (uint8_t)(incoming_packet->data_len >> 8);
+    ack_packet[9] = (uint8_t)incoming_packet->data_len;
+
+    uint16_t checksum = compute_checksum(ack_packet, totalBytes);
+    ack_packet[2] = (uint8_t)(checksum >> 8);
+    ack_packet[3] = (uint8_t)checksum;
+    ssize_t bytes_sent = send(sock_fd, ack_packet, totalBytes, 0);
+    if (bytes_sent < 0)
+    {
+        perror("Failed to send packet");
+        return -1;
+    }
+    return 0;
+}
