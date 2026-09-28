@@ -172,6 +172,8 @@ int publish(int fd, SERVER_ARGUMENT *server)
 
         return 1;
     }
+    packet_header packets[WINDOW_MAX];
+
     server_state *server_state = malloc(sizeof(*server_state));
     if (server_state == NULL)
     {
@@ -194,12 +196,98 @@ int publish(int fd, SERVER_ARGUMENT *server)
     server_state->total_chunks = (uint32_t)((fileMetadata->size + PAYLOAD_SIZE - 1) /
                                             PAYLOAD_SIZE);
     int64_t now = get_time_ms();
+    if (now < 0 || flush(fd, packets, populate_transmission_window(server_state, now, packets)) != 0)
+    {
+        free(server_state);
+        free(fileMetadata);
+        return 1;
+    }
 
     free(fileMetadata);
+    free(server_state);
+
     return 0;
 }
 
-static int flush(int fd, const packet_header *packets, size_t count)
+/**
+ * Populates the sliding window with fresh DATA packets up to the window capacity,
+ * or generates a FIN packet if all payload data has been fully acknowledged.
+ *
+ * @param[in,out] state  Pointer to the sender's active state machine tracking object.
+ * @param[in]     now_ms The current system timestamp in milliseconds (from a monotonic clock).
+ * @param[out]    out    An allocated array where generated packets will be staged for transmission.
+ * @return               The total number of packets successfully placed into the 'out' array.
+ */
+size_t populate_transmission_window(server_state *state, int64_t now_ms, packet_header *out)
+{
+    // 1. Guard clauses for invalid states or completed operations
+    if (state == NULL || out == NULL || state->failed || state->finished)
+    {
+        return 0;
+    }
+
+    size_t count = 0;
+
+    // 2. Loop to fill the sliding window with new DATA packets
+    while (state->next < state->total_chunks &&
+           (state->next - state->base) < state->window)
+    {
+        uint32_t seq = state->next;
+        size_t slot_idx = seq % WINDOW_MAX;
+        packet_header *packet = &state->standby[slot_idx];
+
+        // Format packet metadata
+        packet->pack_type = DATA;
+        packet->seq_num = seq;
+
+        // Calculate slice size and copy from raw data buffer
+        size_t offset = (size_t)seq * PAYLOAD_SIZE;
+        size_t remaining = state->size - offset;
+
+        packet->data_len = PAYLOAD_SIZE;
+        if (remaining < PAYLOAD_SIZE)
+        {
+            packet->data_len = (uint16_t)remaining;
+        }
+
+        memcpy(packet->data, state->data + offset, packet->data_len);
+
+        // Stage the packet for output transmission
+        out[count] = *packet;
+        count++;
+
+        // Start the retransmission timer if this is the oldest unacknowledged packet
+        if (state->base == state->next)
+        {
+            state->limit_ms = now_ms + state->timeout;
+        }
+
+        state->next++;
+    }
+
+    // 3. Emit a FIN packet once all data is fully sent AND acknowledged
+    if (state->base == state->total_chunks && state->next == state->total_chunks)
+    {
+        size_t slot_idx = state->next % WINDOW_MAX;
+        packet_header *packet = &state->standby[slot_idx];
+
+        packet->pack_type = FIN;
+        packet->seq_num = state->next;
+        packet->data_len = 0;
+
+        // Stage the FIN packet for transmission
+        out[count] = *packet;
+        count++;
+
+        // Arm the timeout timer to monitor the FIN packet delivery
+        state->limit_ms = now_ms + state->timeout;
+        state->next++;
+    }
+
+    return count;
+}
+
+int flush(int fd, const packet_header *packets, size_t count)
 {
     for (size_t i = 0; i < count; ++i)
     {

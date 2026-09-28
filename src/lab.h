@@ -14,6 +14,8 @@
 #include <poll.h>
 #include <limits.h>
 
+#define MAX_SIZE_OF_FILE (16U * 1024U * 1024U)
+
 #define PAYLOAD_SIZE 1024U
 #define HEADER_SIZE 10U
 
@@ -84,10 +86,13 @@ typedef struct
     uint32_t total_chunks;
     uint32_t base;
     uint32_t next;
+    int64_t limit_ms;
     unsigned window;
     unsigned timeout;
     int finished;
     int failed;
+
+    packet_header standby[WINDOW_MAX];
 } server_state;
 
 SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[]);
@@ -100,4 +105,7 @@ int get_remaining_timeout_ms(const client_state *state, int64_t now);
 int parse_incoming_packet(const uint8_t *packetPayload, size_t size, packet_header *outputHeader);
 int consume(int sock_fd, client_state *client_state, packet_header *incoming_packet, FILE *opened_file);
 int send_ack(int sock_fd, packet_header *incoming_packet);
+size_t populate_transmission_window(server_state *state, int64_t now_ms, packet_header *out);
+int flush(int fd, const packet_header *packets, size_t count);
+
 #endif // LAB_H
