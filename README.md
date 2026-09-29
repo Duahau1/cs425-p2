@@ -71,7 +71,7 @@ the transferred file is 1 MiB (1024 KiB), throughput in KiB/s is `1024 / time`.
 
         With Go-Back-N, a timeout resends all unacknowledged packets. At window 16, one
 
-    lost packet can therefore cause as many as 16 packets to be sent again,
+    lost packet can cause as many as 16 packets to be sent again,
     including packets the receiver may already have received. At window 1, only one
     packet is outstanding, so a timeout wastes less work, though stop-and-wait still
     has high baseline latency. The relative slowdown is about 255% at window 16
