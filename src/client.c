@@ -151,8 +151,13 @@ int register_client(int socket_fd, CLIENT_ARGUMENT *client)
         ssize_t reply_length = recv(socket_fd, reply, sizeof(reply) - 1, 0);
         if (reply_length >= 0)
         {
-            // TODO: error error
             reply[reply_length] = '\0';
+            registration_status register_status = evaluate_registration_response(reply, (size_t)reply_length);
+            if (register_status == REG_FAILURE || register_status == REG_MALFORMED)
+            {
+                printf("Client failed with the reply reply: %s, with reply_length: %zd\n", reply, reply_length);
+                return 2;
+            }
             printf("Client received reply: %s, with reply_length: %zd\n", reply, reply_length);
             return 0;
         }

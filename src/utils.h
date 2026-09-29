@@ -25,4 +25,13 @@ typedef struct
 
 FILE_METADATA *read_file(const char *path);
 
+typedef enum
+{
+    REG_SUCCESS,
+    REG_FAILURE,
+    REG_MALFORMED
+} registration_status;
+
+registration_status evaluate_registration_response(const char *reply, size_t length);
+
 #endif // UTILS_H

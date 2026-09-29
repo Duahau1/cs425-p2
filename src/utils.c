@@ -258,3 +258,33 @@ int parse_incoming_packet(const uint8_t *packetPayload, size_t size, packet_head
     *outputHeader = parsed_data;
     return 0;
 }
+
+/**
+ * Evaluates an incoming server handshake response and classifies it.
+ *
+ * @param[in]  reply   Pointer to the raw character array containing the server response.
+ * @param[in]  length  The total byte length of the received response string.
+ * @return             The classified handshake status (REG_SUCCESS, REG_FAILURE, or REG_MALFORMED).
+ */
+registration_status evaluate_registration_response(const char *reply, size_t length)
+{
+    // 1. Reject basic null references immediately
+    if (reply == NULL)
+    {
+        return REG_MALFORMED;
+    }
+
+    if (length == 2 && memcmp(reply, "OK", 2) == 0)
+    {
+        return REG_SUCCESS;
+    }
+
+    const size_t ERR_PREFIX_LEN = 4; // Length of "ERR "
+
+    if (length >= (ERR_PREFIX_LEN + 1) && memcmp(reply, "ERR ", ERR_PREFIX_LEN) == 0)
+    {
+        return REG_FAILURE;
+    }
+
+    return REG_MALFORMED;
+}

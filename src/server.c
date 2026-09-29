@@ -173,8 +173,14 @@ int register_server(int fd, SERVER_ARGUMENT *server)
         ssize_t reply_length = recv(fd, reply, sizeof(reply) - 1, 0);
         if (reply_length >= 0)
         {
-            // TODO: error error
             reply[reply_length] = '\0';
+            registration_status register_status = evaluate_registration_response(reply, (size_t)reply_length);
+
+            if (register_status == REG_FAILURE || register_status == REG_MALFORMED)
+            {
+                printf("Server failed with the reply: %s\n", reply);
+                return 2;
+            }
             printf("Server received reply: %s\n", reply);
             return 0;
         }

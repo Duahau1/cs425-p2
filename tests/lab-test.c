@@ -19,6 +19,9 @@ static int mock_send_fail_after;
 static int mock_recv_failure;
 static int mock_recv_fail_count;
 static int mock_recv_errno = EIO;
+static int mock_registration_reply_enabled;
+static char mock_registration_reply[250];
+static size_t mock_registration_reply_length;
 static int mock_setsockopt_failure;
 static int mock_fopen_failure;
 static int mock_remaining_timeout_enabled;
@@ -119,6 +122,17 @@ ssize_t test_recv(int socket_fd, void *buffer, size_t length, int flags)
     {
       errno = mock_recv_errno;
       return -1;
+    }
+    if (mock_registration_reply_enabled)
+    {
+      size_t reply_length = mock_registration_reply_length;
+      if (reply_length > length)
+      {
+        reply_length = length;
+      }
+      memcpy(buffer, mock_registration_reply, reply_length);
+      mock_registration_reply_enabled = 0;
+      return (ssize_t)reply_length;
     }
     (void)socket_fd;
     (void)flags;
@@ -435,6 +449,8 @@ void tearDown(void)
   mock_recv_failure = 0;
   mock_recv_fail_count = 0;
   mock_recv_errno = EIO;
+  mock_registration_reply_enabled = 0;
+  mock_registration_reply_length = 0;
   mock_setsockopt_failure = 0;
   mock_fopen_failure = 0;
   mock_remaining_timeout_enabled = 0;
@@ -528,6 +544,15 @@ void test_session_validator(void)
   TEST_ASSERT_FALSE(session_validator("UpperCase"));
   TEST_ASSERT_FALSE(session_validator("has space"));
   TEST_ASSERT_FALSE(session_validator("this-session-name-is-longer-than-thirty-two"));
+}
+
+void test_registration_response_classifier(void)
+{
+  TEST_ASSERT_EQUAL_INT(REG_SUCCESS, evaluate_registration_response("OK", 2));
+  TEST_ASSERT_EQUAL_INT(REG_FAILURE, evaluate_registration_response("ERR unknown", 11));
+  TEST_ASSERT_EQUAL_INT(REG_MALFORMED, evaluate_registration_response(NULL, 2));
+  TEST_ASSERT_EQUAL_INT(REG_MALFORMED, evaluate_registration_response("OK\n", 3));
+  TEST_ASSERT_EQUAL_INT(REG_MALFORMED, evaluate_registration_response("ERR ", 4));
 }
 
 void test_parse_incoming_packet(void)
@@ -731,13 +756,13 @@ void test_network_initialization_and_registration(void)
   close(reconnected_client_fd);
 
   TEST_ASSERT_EQUAL_INT(0, make_nonblocking_socketpair(sockets));
-  TEST_ASSERT_EQUAL_INT((int)sizeof(reply), (int)send(sockets[1], reply, sizeof(reply), 0));
+  TEST_ASSERT_EQUAL_INT((int)strlen(reply), (int)send(sockets[1], reply, strlen(reply), 0));
   TEST_ASSERT_EQUAL_INT(0, register_client(sockets[0], &client));
   close(sockets[0]);
   close(sockets[1]);
 
   TEST_ASSERT_EQUAL_INT(0, make_nonblocking_socketpair(sockets));
-  TEST_ASSERT_EQUAL_INT((int)sizeof(reply), (int)send(sockets[1], reply, sizeof(reply), 0));
+  TEST_ASSERT_EQUAL_INT((int)strlen(reply), (int)send(sockets[1], reply, strlen(reply), 0));
   TEST_ASSERT_EQUAL_INT(0, register_server(sockets[0], &server));
   close(sockets[0]);
   close(sockets[1]);
@@ -758,6 +783,45 @@ void test_network_initialization_and_registration(void)
   close(sockets[1]);
   TEST_ASSERT_EQUAL_INT(-1, register_server(sockets[0], &server));
   close(sockets[0]);
+}
+
+void test_registration_response_handling(void)
+{
+  CLIENT_ARGUMENT client = {.session = "client"};
+  SERVER_ARGUMENT server = {.session = "server"};
+
+  mock_io_enabled = 1;
+  memcpy(mock_registration_reply, "OK", 2);
+  mock_registration_reply_length = 2;
+  mock_registration_reply_enabled = 1;
+  TEST_ASSERT_EQUAL_INT(0, register_client(42, &client));
+
+  memcpy(mock_registration_reply, "ERR denied", 10);
+  mock_registration_reply_length = 10;
+  mock_registration_reply_enabled = 1;
+  TEST_ASSERT_EQUAL_INT(2, register_client(42, &client));
+
+  memcpy(mock_registration_reply, "NO", 2);
+  mock_registration_reply_length = 2;
+  mock_registration_reply_enabled = 1;
+  TEST_ASSERT_EQUAL_INT(2, register_client(42, &client));
+
+  memcpy(mock_registration_reply, "OK", 2);
+  mock_registration_reply_length = 2;
+  mock_registration_reply_enabled = 1;
+  TEST_ASSERT_EQUAL_INT(0, register_server(42, &server));
+
+  memcpy(mock_registration_reply, "ERR denied", 10);
+  mock_registration_reply_length = 10;
+  mock_registration_reply_enabled = 1;
+  TEST_ASSERT_EQUAL_INT(2, register_server(42, &server));
+
+  memcpy(mock_registration_reply, "NO", 2);
+  mock_registration_reply_length = 2;
+  mock_registration_reply_enabled = 1;
+  TEST_ASSERT_EQUAL_INT(2, register_server(42, &server));
+
+  mock_io_enabled = 0;
 }
 
 void test_server_socket_initialization_paths(void)
@@ -1242,12 +1306,14 @@ int main(void)
   RUN_TEST(test_parse_ser_opt);
   RUN_TEST(test_compute_checksum);
   RUN_TEST(test_session_validator);
+  RUN_TEST(test_registration_response_classifier);
   RUN_TEST(test_parse_incoming_packet);
   RUN_TEST(test_packet_sending);
   RUN_TEST(test_read_file_and_get_time);
   RUN_TEST(test_read_file_error_paths);
   RUN_TEST(test_parse_options_invalid);
   RUN_TEST(test_network_initialization_and_registration);
+  RUN_TEST(test_registration_response_handling);
   RUN_TEST(test_server_socket_initialization_paths);
   RUN_TEST(test_timeout_and_consume);
   RUN_TEST(test_sender_state_machine);
