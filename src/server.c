@@ -216,6 +216,7 @@ int publish(int fd, SERVER_ARGUMENT *server)
     }
     if ((unsigned)server->window > WINDOW_MAX || server->window < 1 || server->timeout_ms == 0)
     {
+        free(current_state);
         free(fileMetadata->data);
         free(fileMetadata);
         return returnCode;
