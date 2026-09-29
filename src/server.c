@@ -2,6 +2,15 @@
 #include "utils.h"
 #include <errno.h>
 
+#ifdef TEST
+extern ssize_t test_send(int socket_fd, const void *buffer, size_t length, int flags);
+extern ssize_t test_recv(int socket_fd, void *buffer, size_t length, int flags);
+extern int test_poll(struct pollfd *fds, nfds_t count, int timeout);
+#define send test_send
+#define recv test_recv
+#define poll test_poll
+#endif
+
 SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[])
 {
     int option;

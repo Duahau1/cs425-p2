@@ -3,6 +3,13 @@
 #include <errno.h>
 #include <netdb.h>
 
+#ifdef TEST
+extern ssize_t test_send(int socket_fd, const void *buffer, size_t length, int flags);
+extern ssize_t test_recv(int socket_fd, void *buffer, size_t length, int flags);
+#define send test_send
+#define recv test_recv
+#endif
+
 CLIENT_ARGUMENT *parse_cl_opt(int argc, char *const argv[])
 {
 
@@ -169,6 +176,7 @@ int process(int fd, CLIENT_ARGUMENT *client)
         fclose(file);
         return returnCode;
     }
+    memset(current_state, 0, sizeof(*current_state));
     int64_t now = get_time_ms();
 
     current_state->last_valid_ms = now;

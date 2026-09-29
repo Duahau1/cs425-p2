@@ -11,6 +11,13 @@
 #include <errno.h>
 #include <poll.h>
 
+#ifdef TEST
+extern ssize_t test_send(int socket_fd, const void *buffer, size_t length, int flags);
+extern int test_clock_gettime(clockid_t clock_id, struct timespec *time_value);
+#define send test_send
+#define clock_gettime test_clock_gettime
+#endif
+
 uint16_t compute_checksum(const uint8_t *data, size_t length)
 {
     uint32_t sum = 0;
