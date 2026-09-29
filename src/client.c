@@ -6,8 +6,12 @@
 #ifdef TEST
 extern ssize_t test_send(int socket_fd, const void *buffer, size_t length, int flags);
 extern ssize_t test_recv(int socket_fd, void *buffer, size_t length, int flags);
+extern int test_socket(int domain, int type, int protocol);
+extern int test_connect(int socket_fd, const struct sockaddr *addr, socklen_t addr_len);
 #define send test_send
 #define recv test_recv
+#define socket test_socket
+#define connect test_connect
 #endif
 
 CLIENT_ARGUMENT *parse_cl_opt(int argc, char *const argv[])
@@ -42,10 +46,6 @@ CLIENT_ARGUMENT *parse_cl_opt(int argc, char *const argv[])
         case 'p':
             port = atoi(optarg);
             break;
-
-        default:
-            free(clientArgument);
-            return NULL;
         }
     }
     int remaining_args = argc - optind;
@@ -168,37 +168,28 @@ int process(int fd, CLIENT_ARGUMENT *client)
         perror("Unable to process file");
         return returnCode;
     }
-    client_state *current_state = malloc(sizeof(*current_state));
-    if (current_state == NULL)
-    {
-        perror("Not able to create sever state");
-        free(current_state);
-        fclose(file);
-        return returnCode;
-    }
-    memset(current_state, 0, sizeof(*current_state));
+    client_state current_state = {0};
     int64_t now = get_time_ms();
 
-    current_state->last_valid_ms = now;
+    current_state.last_valid_ms = now;
     while (1)
     {
         now = get_time_ms();
-        if (current_state->finished && now >= current_state->linger_time_ms)
+        if (current_state.finished && now >= current_state.linger_time_ms)
         {
             returnCode = 0;
             break;
         }
         else
         {
-            if (now - current_state->last_valid_ms >= 30000)
+            if (now - current_state.last_valid_ms >= 30000)
             {
 
                 fprintf(stderr, "Receiver timed outputHeader after 30 seconds idle.\n");
                 break;
             }
         }
-        struct pollfd pfd = {.fd = fd, .events = POLLIN};
-        int remaining_timeout = get_remaining_timeout_ms(current_state, now);
+        int remaining_timeout = get_remaining_timeout_ms(&current_state, now);
         if (remaining_timeout < 0)
         {
             if (errno == EINTR)
@@ -216,7 +207,7 @@ int process(int fd, CLIENT_ARGUMENT *client)
         ssize_t receivedBytes = recv(fd, payloadBuffer, sizeof(payloadBuffer), 0);
         if (receivedBytes < 0)
         {
-            if (errno == EINTR)
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
             {
                 continue;
             }
@@ -224,15 +215,14 @@ int process(int fd, CLIENT_ARGUMENT *client)
             break;
         }
         packet_header incoming_header;
-        int parse_packet = parse_incoming_packet(payloadBuffer, receivedBytes, &incoming_header);
+        int parse_packet = parse_incoming_packet(payloadBuffer, (size_t)receivedBytes, &incoming_header);
         if (parse_packet != 0)
         {
             continue;
         }
-        consume(fd, current_state, &incoming_header, file);
+        consume(fd, &current_state, &incoming_header, file);
     }
     fclose(file);
-    free(current_state);
     return returnCode;
 }
 
@@ -267,6 +257,12 @@ int get_remaining_timeout_ms(const client_state *state, int64_t now)
 
 int consume(int sock_fd, client_state *client_state, packet_header *incoming_packet, FILE *opened_file)
 {
+    if (client_state == NULL || incoming_packet == NULL || incoming_packet->data_len > PAYLOAD_SIZE ||
+        (incoming_packet->pack_type == DATA && incoming_packet->data_len > 0 && opened_file == NULL))
+    {
+        return -1;
+    }
+
     client_state->last_valid_ms = get_time_ms();
 
     // Case 1: In-order DATA packet
@@ -277,19 +273,18 @@ int consume(int sock_fd, client_state *client_state, packet_header *incoming_pac
             fwrite(incoming_packet->data, 1, incoming_packet->data_len, opened_file);
         }
         client_state->expected++;
-        send_ack(sock_fd, incoming_packet);
+        send_ack(sock_fd, client_state->expected);
     }
     // Case 2: Out-of-order or duplicate DATA packet
     else if (incoming_packet->pack_type == DATA)
     {
-        send_ack(sock_fd, incoming_packet);
+        send_ack(sock_fd, client_state->expected);
     }
     // Case 3: In-order FIN packet
     else if (incoming_packet->pack_type == FIN && incoming_packet->seq_num == client_state->expected)
     {
-        fclose(opened_file);
         client_state->expected++;
-        send_ack(sock_fd, incoming_packet);
+        send_ack(sock_fd, client_state->expected);
 
         // Initiate the 2-second linger phase
         client_state->finished = 1;
@@ -299,35 +294,25 @@ int consume(int sock_fd, client_state *client_state, packet_header *incoming_pac
     else if (incoming_packet->pack_type == FIN && client_state->finished)
     {
         // Answer repeated FINs with the exact same ACK to help the sender close cleanly
-        send_ack(sock_fd, incoming_packet);
+        send_ack(sock_fd, client_state->expected);
     }
     return 0;
 }
-int send_ack(int sock_fd, packet_header *incoming_packet)
+int send_ack(int sock_fd, uint32_t sequence_number)
 {
-    // ACK packets contain only the 10-byte header (zero data payload length)
-    uint8_t ack_packet[MAX_SIZE_OF_FILE];
-    size_t totalBytes = HEADER_SIZE + incoming_packet->data_len;
-
-    // Clear out the memory layout entirely (handles padding/reserved fields)
-    memset(ack_packet, 0, sizeof(ack_packet));
+    uint8_t ack_packet[HEADER_SIZE] = {0};
 
     ack_packet[0] = ACK;
 
-    ack_packet[4] = (uint8_t)(incoming_packet->seq_num >> 24);
-    ack_packet[5] = (uint8_t)(incoming_packet->seq_num >> 16);
-    ack_packet[6] = (uint8_t)(incoming_packet->seq_num >> 8);
-    ack_packet[7] = (uint8_t)incoming_packet->seq_num;
+    ack_packet[4] = (uint8_t)(sequence_number >> 24);
+    ack_packet[5] = (uint8_t)(sequence_number >> 16);
+    ack_packet[6] = (uint8_t)(sequence_number >> 8);
+    ack_packet[7] = (uint8_t)sequence_number;
 
-    ack_packet[8] = (uint8_t)(incoming_packet->data_len >> 8);
-    ack_packet[9] = (uint8_t)incoming_packet->data_len;
-
-    // 5. Compute the RFC 1071 Checksum with the checksum region initially zeroed out
-    // The compute_checksum function automatically takes the 1s complement.
-    uint16_t checksum = compute_checksum(ack_packet, totalBytes);
+    uint16_t checksum = compute_checksum(ack_packet, sizeof(ack_packet));
     ack_packet[2] = (uint8_t)(checksum >> 8);
     ack_packet[3] = (uint8_t)checksum;
-    ssize_t bytes_sent = send(sock_fd, ack_packet, totalBytes, 0);
+    ssize_t bytes_sent = send(sock_fd, ack_packet, sizeof(ack_packet), 0);
     if (bytes_sent < 0)
     {
         perror("Failed to send ACK packet");

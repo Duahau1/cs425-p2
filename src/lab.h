@@ -39,7 +39,7 @@ typedef struct
 {
     PROTOCOL_TYPE pack_type;
     uint16_t checksum;
-    uint16_t seq_num;
+    uint32_t seq_num;
     size_t data_len;
     char data[PAYLOAD_SIZE];
 } packet_header;
@@ -103,7 +103,7 @@ int publish(int fd, SERVER_ARGUMENT *server);
 int process(int fd, CLIENT_ARGUMENT *client);
 int get_remaining_timeout_ms(const client_state *state, int64_t now);
 int consume(int sock_fd, client_state *client_state, packet_header *incoming_packet, FILE *opened_file);
-int send_ack(int sock_fd, packet_header *incoming_packet);
+int send_ack(int sock_fd, uint32_t sequence_number);
 size_t populate_transmission_window(server_state *state, int64_t now_ms, packet_header *out);
 int flush(int fd, const packet_header *packets, size_t count);
 size_t handle_retransmission_timeout(server_state *state, int64_t now_ms, packet_header *out);

@@ -191,7 +191,7 @@ int publish(int fd, SERVER_ARGUMENT *server)
         free(fileMetadata);
         return returnCode;
     }
-    if (server->window > WINDOW_MAX || server->window < 1 || server->timeout_ms == 0)
+    if ((unsigned)server->window > WINDOW_MAX || server->window < 1 || server->timeout_ms == 0)
     {
         free(fileMetadata);
         return returnCode;
@@ -200,8 +200,8 @@ int publish(int fd, SERVER_ARGUMENT *server)
 
     current_state->data = fileMetadata->data;
     current_state->size = fileMetadata->size;
-    current_state->window = server->window;
-    current_state->timeout_ms = server->timeout_ms;
+    current_state->window = (unsigned)server->window;
+    current_state->timeout_ms = (unsigned)server->timeout_ms;
     // Standard Division Rounds Down trick
     current_state->total_chunks = (uint32_t)((fileMetadata->size + PAYLOAD_SIZE - 1) /
                                              PAYLOAD_SIZE);
@@ -257,10 +257,14 @@ int publish(int fd, SERVER_ARGUMENT *server)
             break;
         }
         packet_header incoming_header;
-        int parse_packet = parse_incoming_packet(payloadBuffer, receivedBytes, &incoming_header);
+        int parse_packet = parse_incoming_packet(payloadBuffer, (size_t)receivedBytes, &incoming_header);
         if (parse_packet != 0)
         {
             continue;
+        }
+        if (incoming_header.pack_type == ACK)
+        {
+            printf("Received ACK: seq=%u\n", (unsigned)incoming_header.seq_num);
         }
         now = get_time_ms();
         int handledValidAck = handle_valid_ack(current_state, &incoming_header, now);
@@ -366,6 +370,10 @@ int flush(int fd, const packet_header *packets, size_t count)
         {
             return -1;
         }
+        const char *packet_type = packets[i].pack_type == DATA ? "DATA" : packets[i].pack_type == FIN ? "FIN"
+                                                                                                      : "UNKNOWN";
+        printf("Sent %s packet: seq=%u, payload=%zu bytes\n",
+               packet_type, (unsigned)packets[i].seq_num, packets[i].data_len);
     }
     return 0;
 }

@@ -81,9 +81,14 @@ int main(int argc, char *argv[])
         }
         int client_init_status = init_client(clientArgument);
         register_client(client_init_status, clientArgument);
-        process(client_init_status, clientArgument);
+        int process_status = process(client_init_status, clientArgument);
+        if (process_status == 0)
+        {
+            printf("File received successfully: %s\n", clientArgument->file_name);
+        }
         close(client_init_status);
         free(clientArgument);
+        return process_status;
     }
     else
     {

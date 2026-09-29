@@ -15,9 +15,12 @@ static int mock_io_enabled;
 static int mock_send_failure;
 static int mock_recv_failure;
 static int mock_poll_result = 1;
+static int mock_socket_fail_count;
+static int mock_connect_fail_count;
 static int mock_clock_enabled;
 static int mock_clock_failure;
 static int mock_clock_calls;
+static int mock_clock_timeout;
 static uint8_t mock_receive_packets[4][HEADER_SIZE + PAYLOAD_SIZE];
 static size_t mock_receive_sizes[4];
 static size_t mock_receive_count;
@@ -90,6 +93,28 @@ int test_poll(struct pollfd *fds, nfds_t count, int timeout)
   return poll(fds, count, timeout);
 }
 
+int test_socket(int domain, int type, int protocol)
+{
+  if (mock_socket_fail_count > 0)
+  {
+    mock_socket_fail_count--;
+    errno = EMFILE;
+    return -1;
+  }
+  return socket(domain, type, protocol);
+}
+
+int test_connect(int socket_fd, const struct sockaddr *addr, socklen_t addr_len)
+{
+  if (mock_connect_fail_count > 0)
+  {
+    mock_connect_fail_count--;
+    errno = ECONNREFUSED;
+    return -1;
+  }
+  return connect(socket_fd, addr, addr_len);
+}
+
 int test_clock_gettime(clockid_t clock_id, struct timespec *time_value)
 {
   if (mock_clock_enabled)
@@ -100,6 +125,12 @@ int test_clock_gettime(clockid_t clock_id, struct timespec *time_value)
     }
     (void)clock_id;
     mock_clock_calls++;
+    if (mock_clock_timeout)
+    {
+      time_value->tv_sec = mock_clock_calls == 1 ? 1 : 31;
+      time_value->tv_nsec = 0;
+      return 0;
+    }
     time_value->tv_sec = mock_clock_calls <= 6 ? 1 : 3;
     time_value->tv_nsec = 0;
     return 0;
@@ -201,13 +232,6 @@ void test_session_validator(void)
   TEST_ASSERT_FALSE(session_validator("this-session-name-is-longer-than-thirty-two"));
 }
 
-void test_is_relay_addr_valid(void)
-{
-  TEST_ASSERT_FALSE(is_relay_addr_valid(NULL, RELAY_PORT));
-  TEST_ASSERT_FALSE(is_relay_addr_valid("127.0.0.1", 0));
-  TEST_ASSERT_FALSE(is_relay_addr_valid("127.0.0.1", RELAY_PORT));
-}
-
 void test_parse_incoming_packet(void)
 {
   uint8_t packet[HEADER_SIZE + 3] = {DATA, 0, 0, 0, 0, 0, 0, 7, 0, 3, 'a', 'b', 'c'};
@@ -232,15 +256,20 @@ void test_parse_incoming_packet(void)
 void test_packet_sending(void)
 {
   int sockets[2];
-  packet_header packet = {.pack_type = DATA, .seq_num = 4, .data_len = 0};
-  uint8_t received[HEADER_SIZE];
+  packet_header packet = {.pack_type = DATA, .seq_num = 4, .data_len = 4, .data = "data"};
+  packet_header decoded = {0};
+  uint8_t received[HEADER_SIZE + PAYLOAD_SIZE];
 
   TEST_ASSERT_EQUAL_INT(0, make_nonblocking_socketpair(sockets));
   TEST_ASSERT_EQUAL_INT(0, send_packet(sockets[0], &packet));
-  TEST_ASSERT_EQUAL_INT(HEADER_SIZE, recv(sockets[1], received, sizeof(received), 0));
+  ssize_t received_bytes = recv(sockets[1], received, sizeof(received), 0);
+  TEST_ASSERT_EQUAL_INT(HEADER_SIZE + 4, received_bytes);
   TEST_ASSERT_EQUAL_INT(DATA, received[0]);
   TEST_ASSERT_EQUAL_INT(4, received[7]);
-  TEST_ASSERT_EQUAL_INT(0, parse_incoming_packet(received, sizeof(received), &packet));
+  TEST_ASSERT_EQUAL_MEMORY("data", received + HEADER_SIZE, 4);
+  TEST_ASSERT_EQUAL_INT(0, parse_incoming_packet(received, (size_t)received_bytes, &decoded));
+  TEST_ASSERT_EQUAL_UINT32(4, decoded.seq_num);
+  TEST_ASSERT_EQUAL_MEMORY("data", decoded.data, 4);
   close(sockets[0]);
   close(sockets[1]);
 }
@@ -312,6 +341,18 @@ void test_network_initialization_and_registration(void)
   close(client_fd);
   close(server_fd);
 
+  mock_socket_fail_count = 1;
+  int retried_client_fd = init_client(&client);
+  mock_socket_fail_count = 0;
+  TEST_ASSERT_TRUE(retried_client_fd >= 0);
+  close(retried_client_fd);
+
+  mock_connect_fail_count = 1;
+  int reconnected_client_fd = init_client(&client);
+  mock_connect_fail_count = 0;
+  TEST_ASSERT_TRUE(reconnected_client_fd >= 0);
+  close(reconnected_client_fd);
+
   TEST_ASSERT_EQUAL_INT(0, make_nonblocking_socketpair(sockets));
   TEST_ASSERT_EQUAL_INT((int)sizeof(reply), (int)send(sockets[1], reply, sizeof(reply), 0));
   TEST_ASSERT_EQUAL_INT(0, register_client(sockets[0], &client));
@@ -348,7 +389,7 @@ void test_timeout_and_consume(void)
   packet_header packet = {.pack_type = DATA, .seq_num = 3, .data_len = 0};
   FILE *file = tmpfile();
   int sockets[2];
-  uint8_t ack[HEADER_SIZE];
+  uint8_t ack[HEADER_SIZE + PAYLOAD_SIZE];
 
   TEST_ASSERT_EQUAL_INT(30000, get_remaining_timeout_ms(&state, 1000));
   TEST_ASSERT_EQUAL_INT(0, get_remaining_timeout_ms(&state, 31000));
@@ -359,6 +400,7 @@ void test_timeout_and_consume(void)
   TEST_ASSERT_EQUAL_UINT32(4, state.expected);
   TEST_ASSERT_EQUAL_INT(HEADER_SIZE, recv(sockets[1], ack, sizeof(ack), 0));
   TEST_ASSERT_EQUAL_INT(ACK, ack[0]);
+  TEST_ASSERT_EQUAL_UINT8(4, ack[7]);
   fclose(file);
   close(sockets[0]);
   close(sockets[1]);
@@ -403,7 +445,7 @@ void test_protocol_error_branches(void)
   TEST_ASSERT_EQUAL_INT(0, make_nonblocking_socketpair(sockets));
   close(sockets[1]);
   TEST_ASSERT_EQUAL_INT(-1, send_packet(sockets[0], &packet_header_value));
-  TEST_ASSERT_EQUAL_INT(-1, send_ack(sockets[0], &packet_header_value));
+  TEST_ASSERT_EQUAL_INT(-1, send_ack(sockets[0], packet_header_value.seq_num));
   close(sockets[0]);
 }
 
@@ -415,20 +457,31 @@ void test_consume_all_packet_cases(void)
   packet_header fin = {.pack_type = FIN, .seq_num = 2, .data_len = 0};
   FILE *file = tmpfile();
   int sockets[2];
-  uint8_t ack[HEADER_SIZE];
+  uint8_t ack[HEADER_SIZE + PAYLOAD_SIZE];
 
   TEST_ASSERT_NOT_NULL(file);
   TEST_ASSERT_EQUAL_INT(0, make_nonblocking_socketpair(sockets));
+  TEST_ASSERT_EQUAL_INT(-1, consume(sockets[0], NULL, &data, file));
+  TEST_ASSERT_EQUAL_INT(-1, consume(sockets[0], &state, NULL, file));
+  TEST_ASSERT_EQUAL_INT(-1, consume(sockets[0], &state, &data, NULL));
+  data.data_len = PAYLOAD_SIZE + 1;
+  TEST_ASSERT_EQUAL_INT(-1, consume(sockets[0], &state, &data, file));
+  data.data_len = 3;
   TEST_ASSERT_EQUAL_INT(0, consume(sockets[0], &state, &data, file));
   TEST_ASSERT_EQUAL_INT(3, (int)ftell(file));
-  recv(sockets[1], ack, sizeof(ack), 0);
+  TEST_ASSERT_EQUAL_INT(HEADER_SIZE, recv(sockets[1], ack, sizeof(ack), 0));
+  TEST_ASSERT_EQUAL_UINT8(2, ack[7]);
   TEST_ASSERT_EQUAL_INT(0, consume(sockets[0], &state, &duplicate, file));
-  recv(sockets[1], ack, sizeof(ack), 0);
+  TEST_ASSERT_EQUAL_INT(HEADER_SIZE, recv(sockets[1], ack, sizeof(ack), 0));
+  TEST_ASSERT_EQUAL_UINT8(2, ack[7]);
   TEST_ASSERT_EQUAL_INT(0, consume(sockets[0], &state, &fin, file));
-  recv(sockets[1], ack, sizeof(ack), 0);
+  TEST_ASSERT_EQUAL_INT(HEADER_SIZE, recv(sockets[1], ack, sizeof(ack), 0));
+  TEST_ASSERT_EQUAL_UINT8(3, ack[7]);
   TEST_ASSERT_TRUE(state.finished);
+  TEST_ASSERT_EQUAL_INT(0, fseek(file, 0, SEEK_SET));
   TEST_ASSERT_EQUAL_INT(0, consume(sockets[0], &state, &fin, NULL));
-  recv(sockets[1], ack, sizeof(ack), 0);
+  TEST_ASSERT_EQUAL_INT(HEADER_SIZE, recv(sockets[1], ack, sizeof(ack), 0));
+  TEST_ASSERT_EQUAL_UINT8(3, ack[7]);
   fclose(file);
   close(sockets[0]);
   close(sockets[1]);
@@ -547,6 +600,23 @@ void test_process_success(void)
   unlink(path);
 }
 
+void test_process_idle_timeout(void)
+{
+  char path[] = "/tmp/cs425-timeout-XXXXXX";
+  CLIENT_ARGUMENT client = {.file_name = path};
+  int file_fd = mkstemp(path);
+
+  TEST_ASSERT_TRUE(file_fd >= 0);
+  close(file_fd);
+  mock_clock_enabled = 1;
+  mock_clock_timeout = 1;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, process(42, &client));
+  mock_clock_timeout = 0;
+  mock_clock_enabled = 0;
+  unlink(path);
+}
+
 void test_mocked_io_failures(void)
 {
   CLIENT_ARGUMENT client = {.session = "client"};
@@ -618,7 +688,6 @@ int main(void)
   RUN_TEST(test_parse_ser_opt);
   RUN_TEST(test_compute_checksum);
   RUN_TEST(test_session_validator);
-  RUN_TEST(test_is_relay_addr_valid);
   RUN_TEST(test_parse_incoming_packet);
   RUN_TEST(test_packet_sending);
   RUN_TEST(test_read_file_and_get_time);
@@ -633,6 +702,7 @@ int main(void)
   RUN_TEST(test_process_and_publish_invalid_inputs);
   RUN_TEST(test_publish_success);
   RUN_TEST(test_process_success);
+  RUN_TEST(test_process_idle_timeout);
   RUN_TEST(test_mocked_io_failures);
   RUN_TEST(test_mocked_receive_and_publish_failures);
   RUN_TEST(test_publish_poll_and_clock_failures);

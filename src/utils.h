@@ -10,8 +10,6 @@
 
 uint16_t compute_checksum(const uint8_t *data, size_t length);
 
-int is_relay_addr_valid(char *relay, int port);
-
 int session_validator(const char *session);
 
 int send_packet(int sock_fd, const packet_header *incoming_packet);
