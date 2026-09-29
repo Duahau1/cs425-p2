@@ -14,7 +14,7 @@ No crash and memory leaks have been found with test coverage for `lab.h`, `utils
 
 ## Experience
 
-This project was personally challenging and took a lot of time, especially when debugging and designing the code for testability. I used AI to help clarify the requirements, but I also had to read documentation carefully and as I did not have a lot of experience with coding server/client in C. Keeping the Go-Back-N logic independent from I/O was another important design challenge. Using a deterministic clock and an in-memory channel made it easier to test retransmissions, duplicate ACKs, and final ACK loss before integrating UDP and file operations. I also spent hours debugging a segmentation fault that turned out to be caused by an off-by-one error in the header size.
+This project was personally challenging and took a lot of time, especially when debugging and designing the code for testability. I used AI to help clarify the requirements, but I also had to read documentation carefully and as I did not have a lot of experience with coding server/client in C. Keeping the Go-Back-N logic independent from I/O was another important design challenge. I have learnt a lot about design state machine when doing this kind of project as most of the info and guidance that I got was by reading the diagram that they had in the book. I also spent hours debugging a segmentation fault that turned out to be caused by an off-by-one error in the header size. Testing is one of the part that I used AI quite a bit as I have it built some testing harness for me so that I can reuse them throughout the tests.
 
 ## Design
 
@@ -38,7 +38,7 @@ My project only partially enforces this separation: packet parsing and
 sender state helpers are separate, but `send_packet()` performs a socket send,
 `consume()` sends ACKs and writes to a file, and `publish()`/`process()` combine
 I/O loops with protocol transitions. That's the reason why you can see a lot of mocking that I did
-inside of the `server.c` and `client.c` so that I can mock the return value of the I/O blocking call.
+inside of the `server.c`, `client.c`, and `utils.c` so I can avoid the I/O blocking call. 
 
 ## Results
 
@@ -54,9 +54,7 @@ the transferred file is 1 MiB (1024 KiB), throughput in KiB/s is `1024 / time`.
 
 1.  **From the window 1, no loss run, compute the round trip time your sender actually saw. (It sent 1025 packets and waited one round trip for each.) The relay adds 100 ms. Where does the rest come from?**
 
-        The observed round trip time was `104.90 s / 1025 = 0.10234 s`, or about
-
-    `102.34 ms` per packet. This is about `2.34 ms` more than the relay's 100 ms
+        The observed round trip time was `104.90 s / 1025 = 0.10234 s` per packet. This is about `2.34 ms` more than the relay's 100 ms
     delay, due to sender and receiver processing, relay scheduling, and timing
     overhead.
 
@@ -64,7 +62,7 @@ the transferred file is 1 MiB (1024 KiB), throughput in KiB/s is `1024 / time`.
 
         The window-16 run was `104.90 / 6.714 = 15.62` times faster, close to the
 
-    16-packet window's ideal speedup. Pipelining lets the sender have up to 16
+    16-packet window's speedup.This allows the sender to have up to 16
     packets in flight instead of waiting for an ACK after each packet. The small
     difference from 16 comes from startup and final-packet handling, plus processing
     and scheduling overhead that the larger window cannot eliminate.
