@@ -14,8 +14,26 @@
 #ifdef TEST
 extern ssize_t test_send(int socket_fd, const void *buffer, size_t length, int flags);
 extern int test_clock_gettime(clockid_t clock_id, struct timespec *time_value);
+extern int test_regcomp(regex_t *pattern, const char *regex, int flags);
+extern FILE *test_fopen(const char *path, const char *mode);
+extern int test_fseek(FILE *stream, long offset, int origin);
+extern long test_ftell(FILE *stream);
+extern void *test_malloc(size_t size);
+extern size_t test_fread(void *buffer, size_t size, size_t count, FILE *stream);
+extern int test_ferror(FILE *stream);
+extern int test_feof(FILE *stream);
+extern int test_fclose(FILE *stream);
 #define send test_send
 #define clock_gettime test_clock_gettime
+#define regcomp test_regcomp
+#define fopen test_fopen
+#define fseek test_fseek
+#define ftell test_ftell
+#define malloc test_malloc
+#define fread test_fread
+#define ferror test_ferror
+#define feof test_feof
+#define fclose test_fclose
 #endif
 
 uint16_t compute_checksum(const uint8_t *data, size_t length)

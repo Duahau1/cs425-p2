@@ -8,10 +8,17 @@ extern ssize_t test_send(int socket_fd, const void *buffer, size_t length, int f
 extern ssize_t test_recv(int socket_fd, void *buffer, size_t length, int flags);
 extern int test_socket(int domain, int type, int protocol);
 extern int test_connect(int socket_fd, const struct sockaddr *addr, socklen_t addr_len);
+extern int test_setsockopt(int socket_fd, int level, int option_name,
+                           const void *option_value, socklen_t option_length);
+extern FILE *test_fopen(const char *path, const char *mode);
+extern int test_get_remaining_timeout_ms(const client_state *state, int64_t now);
 #define send test_send
 #define recv test_recv
 #define socket test_socket
 #define connect test_connect
+#define setsockopt test_setsockopt
+#define fopen test_fopen
+#define get_remaining_timeout_ms test_get_remaining_timeout_ms
 #endif
 
 CLIENT_ARGUMENT *parse_cl_opt(int argc, char *const argv[])
@@ -226,6 +233,9 @@ int process(int fd, CLIENT_ARGUMENT *client)
     return returnCode;
 }
 
+#ifdef TEST
+#undef get_remaining_timeout_ms
+#endif
 int get_remaining_timeout_ms(const client_state *state, int64_t now)
 {
     if (state == NULL)

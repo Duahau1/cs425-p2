@@ -7,24 +7,57 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <regex.h>
 #include "harness/unity.h"
 #include "../src/lab.h"
 #include "../src/utils.h"
 
 static int mock_io_enabled;
 static int mock_send_failure;
+static int mock_send_short;
+static int mock_send_fail_after;
 static int mock_recv_failure;
+static int mock_recv_fail_count;
+static int mock_recv_errno = EIO;
+static int mock_setsockopt_failure;
+static int mock_fopen_failure;
+static int mock_remaining_timeout_enabled;
+static int mock_remaining_timeout_value;
+static int mock_remaining_timeout_errno;
+static int mock_file_io_enabled;
+static long mock_ftell_value;
+static const char *mock_file_contents;
+static size_t mock_fread_bytes;
+static int mock_ferror_value;
+static int mock_feof_value;
+static int mock_regcomp_failure;
+static int mock_malloc_fail_at;
+static int mock_malloc_calls;
+static int mock_file_token;
 static int mock_poll_result = 1;
+static int mock_poll_interrupt_count;
+static int mock_poll_errno = EIO;
 static int mock_socket_fail_count;
 static int mock_connect_fail_count;
+static int mock_connect_enabled;
+static int mock_server_network_enabled;
+static int mock_getopt_enabled;
+static int mock_getopt_value;
 static int mock_clock_enabled;
 static int mock_clock_failure;
 static int mock_clock_calls;
 static int mock_clock_timeout;
+static int mock_clock_step_enabled;
+static int mock_clock_step_ms;
 static uint8_t mock_receive_packets[4][HEADER_SIZE + PAYLOAD_SIZE];
 static size_t mock_receive_sizes[4];
 static size_t mock_receive_count;
 static size_t mock_receive_index;
+static uint8_t mock_sent_packets[16][HEADER_SIZE + PAYLOAD_SIZE];
+static size_t mock_sent_sizes[16];
+static size_t mock_sent_count;
+static struct addrinfo mock_server_addrinfo;
+static struct sockaddr_in mock_server_sockaddr;
 
 static int make_nonblocking_socketpair(int sockets[2])
 {
@@ -49,6 +82,24 @@ ssize_t test_send(int socket_fd, const void *buffer, size_t length, int flags)
       errno = EIO;
       return -1;
     }
+    if (mock_send_short)
+    {
+      return (ssize_t)(length - 1);
+    }
+    if (mock_send_fail_after > 0 && --mock_send_fail_after == 0)
+    {
+      errno = EIO;
+      return -1;
+    }
+    if (mock_sent_count >= sizeof(mock_sent_packets) / sizeof(mock_sent_packets[0]) ||
+        length > sizeof(mock_sent_packets[0]))
+    {
+      errno = EMSGSIZE;
+      return -1;
+    }
+    memcpy(mock_sent_packets[mock_sent_count], buffer, length);
+    mock_sent_sizes[mock_sent_count] = length;
+    mock_sent_count++;
     return (ssize_t)length;
   }
   return send(socket_fd, buffer, length, flags);
@@ -58,9 +109,15 @@ ssize_t test_recv(int socket_fd, void *buffer, size_t length, int flags)
 {
   if (mock_io_enabled)
   {
+    if (mock_recv_fail_count > 0)
+    {
+      mock_recv_fail_count--;
+      errno = mock_recv_errno;
+      return -1;
+    }
     if (mock_recv_failure)
     {
-      errno = EIO;
+      errno = mock_recv_errno;
       return -1;
     }
     (void)socket_fd;
@@ -84,9 +141,15 @@ int test_poll(struct pollfd *fds, nfds_t count, int timeout)
     (void)fds;
     (void)count;
     (void)timeout;
+    if (mock_poll_interrupt_count > 0)
+    {
+      mock_poll_interrupt_count--;
+      errno = EINTR;
+      return -1;
+    }
     if (mock_poll_result < 0)
     {
-      errno = EIO;
+      errno = mock_poll_errno;
     }
     return mock_poll_result;
   }
@@ -106,6 +169,16 @@ int test_socket(int domain, int type, int protocol)
 
 int test_connect(int socket_fd, const struct sockaddr *addr, socklen_t addr_len)
 {
+  if (mock_connect_enabled)
+  {
+    if (mock_connect_fail_count > 0)
+    {
+      mock_connect_fail_count--;
+      errno = ECONNREFUSED;
+      return -1;
+    }
+    return 0;
+  }
   if (mock_connect_fail_count > 0)
   {
     mock_connect_fail_count--;
@@ -113,6 +186,172 @@ int test_connect(int socket_fd, const struct sockaddr *addr, socklen_t addr_len)
     return -1;
   }
   return connect(socket_fd, addr, addr_len);
+}
+
+int test_getaddrinfo(const char *node, const char *service,
+                     const struct addrinfo *hints, struct addrinfo **result)
+{
+  if (!mock_server_network_enabled)
+  {
+    return getaddrinfo(node, service, hints, result);
+  }
+  if (strcmp(node, "invalid host name") == 0)
+  {
+    return EAI_NONAME;
+  }
+  memset(&mock_server_addrinfo, 0, sizeof(mock_server_addrinfo));
+  memset(&mock_server_sockaddr, 0, sizeof(mock_server_sockaddr));
+  mock_server_sockaddr.sin_family = AF_INET;
+  mock_server_sockaddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  mock_server_sockaddr.sin_port = htons((uint16_t)strtoul(service, NULL, 10));
+  mock_server_addrinfo.ai_family = AF_INET;
+  mock_server_addrinfo.ai_socktype = SOCK_DGRAM;
+  mock_server_addrinfo.ai_protocol = IPPROTO_UDP;
+  mock_server_addrinfo.ai_addr = (struct sockaddr *)&mock_server_sockaddr;
+  mock_server_addrinfo.ai_addrlen = sizeof(mock_server_sockaddr);
+  *result = &mock_server_addrinfo;
+  return 0;
+}
+
+void test_freeaddrinfo(struct addrinfo *result)
+{
+  if (!mock_server_network_enabled)
+  {
+    freeaddrinfo(result);
+  }
+}
+
+int test_getopt(int argc, char *const argv[], const char *options)
+{
+  if (mock_getopt_enabled)
+  {
+    mock_getopt_enabled = 0;
+    return mock_getopt_value;
+  }
+  return getopt(argc, argv, options);
+}
+
+int test_setsockopt(int socket_fd, int level, int option_name,
+                    const void *option_value, socklen_t option_length)
+{
+  (void)socket_fd;
+  (void)level;
+  (void)option_name;
+  (void)option_value;
+  (void)option_length;
+  if (mock_setsockopt_failure)
+  {
+    errno = EIO;
+    return -1;
+  }
+  return 0;
+}
+
+FILE *test_fopen(const char *path, const char *mode)
+{
+  if (mock_file_io_enabled)
+  {
+    (void)path;
+    (void)mode;
+    return (FILE *)&mock_file_token;
+  }
+  if (mock_fopen_failure)
+  {
+    errno = EACCES;
+    return NULL;
+  }
+  return fopen(path, mode);
+}
+
+int test_regcomp(regex_t *pattern, const char *regex, int flags)
+{
+  if (mock_regcomp_failure)
+  {
+    return REG_ESPACE;
+  }
+  return regcomp(pattern, regex, flags);
+}
+
+int test_fseek(FILE *stream, long offset, int origin)
+{
+  if (mock_file_io_enabled)
+  {
+    (void)stream;
+    (void)offset;
+    (void)origin;
+    return 0;
+  }
+  return fseek(stream, offset, origin);
+}
+
+long test_ftell(FILE *stream)
+{
+  if (mock_file_io_enabled)
+  {
+    (void)stream;
+    return mock_ftell_value;
+  }
+  return ftell(stream);
+}
+
+void *test_malloc(size_t size)
+{
+  mock_malloc_calls++;
+  if (mock_malloc_fail_at > 0 && mock_malloc_calls == mock_malloc_fail_at)
+  {
+    return NULL;
+  }
+  return malloc(size);
+}
+
+size_t test_fread(void *buffer, size_t size, size_t count, FILE *stream)
+{
+  if (mock_file_io_enabled)
+  {
+    (void)stream;
+    size_t bytes_to_copy = mock_fread_bytes;
+    size_t requested_bytes = size * count;
+    if (bytes_to_copy > requested_bytes)
+    {
+      bytes_to_copy = requested_bytes;
+    }
+    if (bytes_to_copy > 0)
+    {
+      memcpy(buffer, mock_file_contents, bytes_to_copy);
+    }
+    return size == 0 ? 0 : bytes_to_copy / size;
+  }
+  return fread(buffer, size, count, stream);
+}
+
+int test_ferror(FILE *stream)
+{
+  if (mock_file_io_enabled)
+  {
+    (void)stream;
+    return mock_ferror_value;
+  }
+  return ferror(stream);
+}
+
+int test_feof(FILE *stream)
+{
+  if (mock_file_io_enabled)
+  {
+    (void)stream;
+    return mock_feof_value;
+  }
+  return feof(stream);
+}
+
+int test_fclose(FILE *stream)
+{
+  if (mock_file_io_enabled)
+  {
+    (void)stream;
+    return 0;
+  }
+  return fclose(stream);
 }
 
 int test_clock_gettime(clockid_t clock_id, struct timespec *time_value)
@@ -125,9 +364,16 @@ int test_clock_gettime(clockid_t clock_id, struct timespec *time_value)
     }
     (void)clock_id;
     mock_clock_calls++;
+    if (mock_clock_step_enabled)
+    {
+      int64_t milliseconds = 1000 + (int64_t)(mock_clock_calls - 1) * mock_clock_step_ms;
+      time_value->tv_sec = (time_t)(milliseconds / 1000);
+      time_value->tv_nsec = (long)(milliseconds % 1000) * 1000000L;
+      return 0;
+    }
     if (mock_clock_timeout)
     {
-      time_value->tv_sec = mock_clock_calls == 1 ? 1 : 31;
+      time_value->tv_sec = mock_clock_calls <= 2 ? 1 : 31;
       time_value->tv_nsec = 0;
       return 0;
     }
@@ -136,6 +382,19 @@ int test_clock_gettime(clockid_t clock_id, struct timespec *time_value)
     return 0;
   }
   return clock_gettime(clock_id, time_value);
+}
+
+int test_get_remaining_timeout_ms(const client_state *state, int64_t now)
+{
+  if (mock_remaining_timeout_enabled)
+  {
+    if (mock_remaining_timeout_errno != 0)
+    {
+      errno = mock_remaining_timeout_errno;
+    }
+    return mock_remaining_timeout_value;
+  }
+  return get_remaining_timeout_ms(state, now);
 }
 
 static void queue_wire_packet(PROTOCOL_TYPE type, uint32_t sequence,
@@ -169,6 +428,45 @@ void setUp(void)
 
 void tearDown(void)
 {
+  mock_io_enabled = 0;
+  mock_send_failure = 0;
+  mock_send_short = 0;
+  mock_send_fail_after = 0;
+  mock_recv_failure = 0;
+  mock_recv_fail_count = 0;
+  mock_recv_errno = EIO;
+  mock_setsockopt_failure = 0;
+  mock_fopen_failure = 0;
+  mock_remaining_timeout_enabled = 0;
+  mock_remaining_timeout_value = 0;
+  mock_remaining_timeout_errno = 0;
+  mock_file_io_enabled = 0;
+  mock_ftell_value = 0;
+  mock_file_contents = NULL;
+  mock_fread_bytes = 0;
+  mock_ferror_value = 0;
+  mock_feof_value = 0;
+  mock_regcomp_failure = 0;
+  mock_malloc_fail_at = 0;
+  mock_malloc_calls = 0;
+  mock_poll_result = 1;
+  mock_poll_interrupt_count = 0;
+  mock_poll_errno = EIO;
+  mock_socket_fail_count = 0;
+  mock_connect_fail_count = 0;
+  mock_connect_enabled = 0;
+  mock_server_network_enabled = 0;
+  mock_getopt_enabled = 0;
+  mock_getopt_value = 0;
+  mock_clock_enabled = 0;
+  mock_clock_failure = 0;
+  mock_clock_timeout = 0;
+  mock_clock_step_enabled = 0;
+  mock_clock_step_ms = 0;
+  mock_clock_calls = 0;
+  mock_receive_count = 0;
+  mock_receive_index = 0;
+  mock_sent_count = 0;
   printf("Tearing down tests...\n");
 }
 
@@ -251,27 +549,52 @@ void test_parse_incoming_packet(void)
 
   packet[1] = 1;
   TEST_ASSERT_EQUAL_INT(-1, parse_incoming_packet(packet, sizeof(packet), &output));
+
+  packet[1] = 0;
+  packet[8] = 0x04;
+  packet[9] = 0x01;
+  TEST_ASSERT_EQUAL_INT(-1, parse_incoming_packet(packet, sizeof(packet), &output));
+  packet[8] = 0;
+  packet[9] = 4;
+  TEST_ASSERT_EQUAL_INT(-1, parse_incoming_packet(packet, sizeof(packet), &output));
+  packet[9] = 1;
+  packet[0] = FIN;
+  TEST_ASSERT_EQUAL_INT(-1, parse_incoming_packet(packet, HEADER_SIZE + 1, &output));
 }
 
 void test_packet_sending(void)
 {
-  int sockets[2];
   packet_header packet = {.pack_type = DATA, .seq_num = 4, .data_len = 4, .data = "data"};
   packet_header decoded = {0};
-  uint8_t received[HEADER_SIZE + PAYLOAD_SIZE];
 
-  TEST_ASSERT_EQUAL_INT(0, make_nonblocking_socketpair(sockets));
-  TEST_ASSERT_EQUAL_INT(0, send_packet(sockets[0], &packet));
-  ssize_t received_bytes = recv(sockets[1], received, sizeof(received), 0);
+  mock_sent_count = 0;
+  mock_io_enabled = 1;
+  TEST_ASSERT_EQUAL_INT(0, send_packet(42, &packet));
+  mock_io_enabled = 0;
+  TEST_ASSERT_EQUAL_UINT(1, mock_sent_count);
+  ssize_t received_bytes = (ssize_t)mock_sent_sizes[0];
   TEST_ASSERT_EQUAL_INT(HEADER_SIZE + 4, received_bytes);
-  TEST_ASSERT_EQUAL_INT(DATA, received[0]);
-  TEST_ASSERT_EQUAL_INT(4, received[7]);
-  TEST_ASSERT_EQUAL_MEMORY("data", received + HEADER_SIZE, 4);
-  TEST_ASSERT_EQUAL_INT(0, parse_incoming_packet(received, (size_t)received_bytes, &decoded));
+  TEST_ASSERT_EQUAL_INT(DATA, mock_sent_packets[0][0]);
+  TEST_ASSERT_EQUAL_INT(4, mock_sent_packets[0][7]);
+  TEST_ASSERT_EQUAL_MEMORY("data", mock_sent_packets[0] + HEADER_SIZE, 4);
+  TEST_ASSERT_EQUAL_INT(0, parse_incoming_packet(mock_sent_packets[0], (size_t)received_bytes, &decoded));
   TEST_ASSERT_EQUAL_UINT32(4, decoded.seq_num);
   TEST_ASSERT_EQUAL_MEMORY("data", decoded.data, 4);
-  close(sockets[0]);
-  close(sockets[1]);
+
+  TEST_ASSERT_EQUAL_INT(-1, send_packet(42, NULL));
+  packet.data_len = PAYLOAD_SIZE + 1;
+  TEST_ASSERT_EQUAL_INT(-1, send_packet(42, &packet));
+  packet.data_len = 1;
+  packet.pack_type = FIN;
+  TEST_ASSERT_EQUAL_INT(-1, send_packet(42, &packet));
+
+  packet.pack_type = DATA;
+  packet.data_len = 4;
+  mock_send_short = 1;
+  mock_io_enabled = 1;
+  TEST_ASSERT_EQUAL_INT(-1, send_packet(42, &packet));
+  mock_io_enabled = 0;
+  mock_send_short = 0;
 }
 
 void test_read_file_and_get_time(void)
@@ -301,6 +624,57 @@ void test_read_file_and_get_time(void)
   TEST_ASSERT_TRUE(get_time_ms() >= first_time);
 }
 
+void test_read_file_error_paths(void)
+{
+  FILE_METADATA *metadata;
+
+  mock_regcomp_failure = 1;
+  TEST_ASSERT_FALSE(session_validator("valid"));
+  mock_regcomp_failure = 0;
+
+  mock_file_io_enabled = 1;
+  mock_file_contents = "abc";
+  mock_fread_bytes = 3;
+  mock_ftell_value = -1;
+  TEST_ASSERT_NULL(read_file("mocked"));
+  mock_ftell_value = (long)MAX_SIZE_OF_FILE + 1;
+  TEST_ASSERT_NULL(read_file("mocked"));
+
+  mock_ftell_value = 3;
+  mock_malloc_fail_at = 1;
+  mock_malloc_calls = 0;
+  TEST_ASSERT_NULL(read_file("mocked"));
+  mock_malloc_fail_at = 2;
+  mock_malloc_calls = 0;
+  TEST_ASSERT_NULL(read_file("mocked"));
+  mock_malloc_fail_at = 0;
+
+  mock_ftell_value = 10;
+  mock_ferror_value = 1;
+  metadata = read_file("mocked");
+  TEST_ASSERT_NOT_NULL(metadata);
+  TEST_ASSERT_EQUAL_UINT(3, metadata->size);
+  TEST_ASSERT_EQUAL_MEMORY("abc", metadata->data, 3);
+  free(metadata->data);
+  free(metadata);
+
+  mock_ferror_value = 0;
+  mock_feof_value = 1;
+  metadata = read_file("mocked");
+  TEST_ASSERT_NOT_NULL(metadata);
+  TEST_ASSERT_EQUAL_UINT(3, metadata->size);
+  free(metadata->data);
+  free(metadata);
+
+  mock_ftell_value = 0;
+  mock_fread_bytes = 0;
+  metadata = read_file("mocked");
+  TEST_ASSERT_NOT_NULL(metadata);
+  TEST_ASSERT_EQUAL_UINT(0, metadata->size);
+  free(metadata->data);
+  free(metadata);
+}
+
 void test_parse_options_invalid(void)
 {
   char *client_argv[] = {"myapp", "relay"};
@@ -316,6 +690,9 @@ void test_parse_options_invalid(void)
   TEST_ASSERT_NULL(parse_cl_opt(4, bad_client_argv));
   optind = 1;
   TEST_ASSERT_NULL(parse_ser_opt(4, bad_server_argv));
+  mock_getopt_value = 'z';
+  mock_getopt_enabled = 1;
+  TEST_ASSERT_NULL(parse_ser_opt(3, server_argv));
   TEST_ASSERT_NULL(parse_cl_opt(0, NULL));
   TEST_ASSERT_NULL(parse_ser_opt(0, NULL));
 }
@@ -383,6 +760,28 @@ void test_network_initialization_and_registration(void)
   close(sockets[0]);
 }
 
+void test_server_socket_initialization_paths(void)
+{
+  SERVER_ARGUMENT server = {.relay = "relay.test", .port = RELAY_PORT};
+
+  mock_server_network_enabled = 1;
+  server.relay = "invalid host name";
+  TEST_ASSERT_EQUAL_INT(1, init_server(&server));
+  server.relay = "relay.test";
+
+  mock_socket_fail_count = 1;
+  TEST_ASSERT_EQUAL_INT(-1, init_server(&server));
+
+  mock_connect_enabled = 1;
+  mock_connect_fail_count = 1;
+  TEST_ASSERT_EQUAL_INT(-1, init_server(&server));
+
+  mock_connect_fail_count = 0;
+  int socket_fd = init_server(&server);
+  TEST_ASSERT_TRUE(socket_fd >= 0);
+  close(socket_fd);
+}
+
 void test_timeout_and_consume(void)
 {
   client_state state = {.expected = 3, .finished = 0, .last_valid_ms = 1000};
@@ -423,6 +822,12 @@ void test_sender_state_machine(void)
   ack.seq_num = 2;
   TEST_ASSERT_EQUAL_INT(1, handle_valid_ack(&state, &ack, 130));
   TEST_ASSERT_TRUE(state.finished);
+
+  server_state partial_state = {.base = 0, .next = 3, .total_chunks = 5, .timeout_ms = 25};
+  packet_header partial_ack = {.pack_type = ACK, .seq_num = 1, .data_len = 0};
+  TEST_ASSERT_EQUAL_INT(1, handle_valid_ack(&partial_state, &partial_ack, 200));
+  TEST_ASSERT_EQUAL_UINT32(1, partial_state.base);
+  TEST_ASSERT_EQUAL_INT64(225, partial_state.limit_ms);
 }
 
 void test_protocol_error_branches(void)
@@ -559,6 +964,14 @@ void test_process_and_publish_invalid_inputs(void)
   unlink(client.file_name);
 }
 
+void test_process_open_failure(void)
+{
+  CLIENT_ARGUMENT client = {.file_name = "mocked-file"};
+
+  mock_fopen_failure = 1;
+  TEST_ASSERT_EQUAL_INT(2, process(42, &client));
+}
+
 void test_publish_success(void)
 {
   char path[] = "/tmp/cs425-publish-XXXXXX";
@@ -571,11 +984,86 @@ void test_publish_success(void)
   close(file_fd);
   mock_receive_count = 0;
   mock_receive_index = 0;
+  mock_sent_count = 0;
+  queue_wire_packet(DATA, 0, NULL, 0);
+  mock_receive_packets[0][1] = 1;
   queue_wire_packet(ACK, 1, NULL, 0);
   queue_wire_packet(ACK, 2, NULL, 0);
   mock_io_enabled = 1;
+  mock_poll_interrupt_count = 1;
+  mock_recv_fail_count = 1;
+  mock_recv_errno = EINTR;
   TEST_ASSERT_EQUAL_INT(0, publish(42, &server));
   mock_io_enabled = 0;
+  TEST_ASSERT_EQUAL_UINT(2, mock_sent_count);
+  TEST_ASSERT_EQUAL_UINT(HEADER_SIZE + strlen(contents), mock_sent_sizes[0]);
+  TEST_ASSERT_EQUAL_INT(DATA, mock_sent_packets[0][0]);
+  TEST_ASSERT_EQUAL_MEMORY(contents, mock_sent_packets[0] + HEADER_SIZE, strlen(contents));
+  TEST_ASSERT_EQUAL_UINT(HEADER_SIZE, mock_sent_sizes[1]);
+  TEST_ASSERT_EQUAL_INT(FIN, mock_sent_packets[1][0]);
+  unlink(path);
+}
+
+void test_publish_error_and_timeout_paths(void)
+{
+  char path[] = "/tmp/cs425-publish-paths-XXXXXX";
+  const char contents[] = "x";
+  int file_fd = mkstemp(path);
+  SERVER_ARGUMENT server = {.file_name = path, .window = 1, .timeout_ms = 1000};
+
+  TEST_ASSERT_TRUE(file_fd >= 0);
+  TEST_ASSERT_EQUAL_INT(1, (int)write(file_fd, contents, sizeof(contents) - 1));
+  close(file_fd);
+  mock_io_enabled = 1;
+
+  mock_fopen_failure = 1;
+  TEST_ASSERT_EQUAL_INT(2, publish(42, &server));
+  mock_fopen_failure = 0;
+
+  mock_send_failure = 1;
+  TEST_ASSERT_EQUAL_INT(2, publish(42, &server));
+  mock_send_failure = 0;
+
+  server.window = 0;
+  TEST_ASSERT_EQUAL_INT(2, publish(42, &server));
+  server.window = (int)WINDOW_MAX + 1;
+  TEST_ASSERT_EQUAL_INT(2, publish(42, &server));
+  server.window = 1;
+  server.timeout_ms = 0;
+  TEST_ASSERT_EQUAL_INT(2, publish(42, &server));
+
+  server.timeout_ms = 1000;
+  mock_malloc_fail_at = 3;
+  mock_malloc_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, publish(42, &server));
+  mock_malloc_fail_at = 0;
+
+  mock_receive_count = 0;
+  mock_receive_index = 0;
+  mock_sent_count = 0;
+  mock_send_fail_after = 2;
+  queue_wire_packet(ACK, 1, NULL, 0);
+  mock_clock_enabled = 1;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, publish(42, &server));
+  mock_clock_enabled = 0;
+  mock_send_fail_after = 0;
+
+  server.timeout_ms = 1;
+  mock_sent_count = 0;
+  mock_send_fail_after = 2;
+  mock_clock_enabled = 1;
+  mock_clock_step_enabled = 1;
+  mock_clock_step_ms = 10;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, publish(42, &server));
+  mock_send_fail_after = 0;
+
+  server.timeout_ms = 100;
+  mock_sent_count = 0;
+  mock_poll_result = 0;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, publish(42, &server));
   unlink(path);
 }
 
@@ -608,12 +1096,59 @@ void test_process_idle_timeout(void)
 
   TEST_ASSERT_TRUE(file_fd >= 0);
   close(file_fd);
+  mock_io_enabled = 1;
+  mock_recv_failure = 1;
+  mock_recv_errno = EAGAIN;
   mock_clock_enabled = 1;
   mock_clock_timeout = 1;
   mock_clock_calls = 0;
   TEST_ASSERT_EQUAL_INT(2, process(42, &client));
-  mock_clock_timeout = 0;
-  mock_clock_enabled = 0;
+  unlink(path);
+}
+
+void test_process_uncovered_timeout_and_packet_paths(void)
+{
+  char path[] = "/tmp/cs425-client-branches-XXXXXX";
+  CLIENT_ARGUMENT client = {.file_name = path};
+  int file_fd = mkstemp(path);
+
+  TEST_ASSERT_TRUE(file_fd >= 0);
+  close(file_fd);
+  mock_io_enabled = 1;
+  mock_clock_enabled = 1;
+  mock_clock_timeout = 1;
+  mock_remaining_timeout_enabled = 1;
+  mock_remaining_timeout_value = -1;
+  mock_remaining_timeout_errno = EINTR;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, process(42, &client));
+
+  mock_remaining_timeout_errno = EIO;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, process(42, &client));
+
+  mock_remaining_timeout_value = 0;
+  mock_remaining_timeout_errno = 0;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, process(42, &client));
+
+  mock_remaining_timeout_enabled = 0;
+  mock_recv_failure = 1;
+  mock_recv_errno = EINTR;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, process(42, &client));
+
+  mock_recv_errno = EAGAIN;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, process(42, &client));
+
+  mock_recv_failure = 0;
+  mock_receive_count = 0;
+  mock_receive_index = 0;
+  queue_wire_packet(DATA, 0, NULL, 0);
+  mock_receive_packets[0][1] = 1;
+  mock_clock_calls = 0;
+  TEST_ASSERT_EQUAL_INT(2, process(42, &client));
   unlink(path);
 }
 
@@ -640,6 +1175,25 @@ void test_mocked_io_failures(void)
   mock_io_enabled = 0;
   close(sockets[0]);
   close(sockets[1]);
+
+  mock_io_enabled = 1;
+  mock_setsockopt_failure = 1;
+  TEST_ASSERT_EQUAL_INT(-1, register_client(42, &client));
+  TEST_ASSERT_EQUAL_INT(-1, register_server(42, &server));
+  mock_setsockopt_failure = 0;
+  mock_recv_failure = 1;
+  mock_recv_errno = EIO;
+  TEST_ASSERT_EQUAL_INT(-1, register_client(42, &client));
+  mock_recv_errno = EAGAIN;
+  TEST_ASSERT_EQUAL_INT(-1, register_client(42, &client));
+
+  mock_recv_errno = EIO;
+  mock_sent_count = 0;
+  TEST_ASSERT_EQUAL_INT(-1, register_server(42, &server));
+  mock_recv_errno = EAGAIN;
+  mock_sent_count = 0;
+  TEST_ASSERT_EQUAL_INT(-1, register_server(42, &server));
+  mock_io_enabled = 0;
 }
 
 void test_mocked_receive_and_publish_failures(void)
@@ -691,8 +1245,10 @@ int main(void)
   RUN_TEST(test_parse_incoming_packet);
   RUN_TEST(test_packet_sending);
   RUN_TEST(test_read_file_and_get_time);
+  RUN_TEST(test_read_file_error_paths);
   RUN_TEST(test_parse_options_invalid);
   RUN_TEST(test_network_initialization_and_registration);
+  RUN_TEST(test_server_socket_initialization_paths);
   RUN_TEST(test_timeout_and_consume);
   RUN_TEST(test_sender_state_machine);
   RUN_TEST(test_protocol_error_branches);
@@ -700,9 +1256,12 @@ int main(void)
   RUN_TEST(test_state_guards_and_timeout_paths);
   RUN_TEST(test_retransmission_and_flush);
   RUN_TEST(test_process_and_publish_invalid_inputs);
+  RUN_TEST(test_process_open_failure);
   RUN_TEST(test_publish_success);
+  RUN_TEST(test_publish_error_and_timeout_paths);
   RUN_TEST(test_process_success);
   RUN_TEST(test_process_idle_timeout);
+  RUN_TEST(test_process_uncovered_timeout_and_packet_paths);
   RUN_TEST(test_mocked_io_failures);
   RUN_TEST(test_mocked_receive_and_publish_failures);
   RUN_TEST(test_publish_poll_and_clock_failures);

@@ -6,9 +6,25 @@
 extern ssize_t test_send(int socket_fd, const void *buffer, size_t length, int flags);
 extern ssize_t test_recv(int socket_fd, void *buffer, size_t length, int flags);
 extern int test_poll(struct pollfd *fds, nfds_t count, int timeout);
+extern int test_socket(int domain, int type, int protocol);
+extern int test_connect(int socket_fd, const struct sockaddr *addr, socklen_t addr_len);
+extern int test_getaddrinfo(const char *node, const char *service,
+                            const struct addrinfo *hints, struct addrinfo **result);
+extern void test_freeaddrinfo(struct addrinfo *result);
+extern int test_setsockopt(int socket_fd, int level, int option_name,
+                           const void *option_value, socklen_t option_length);
+extern int test_getopt(int argc, char *const argv[], const char *options);
+extern void *test_malloc(size_t size);
 #define send test_send
 #define recv test_recv
 #define poll test_poll
+#define socket test_socket
+#define connect test_connect
+#define getaddrinfo test_getaddrinfo
+#define freeaddrinfo test_freeaddrinfo
+#define setsockopt test_setsockopt
+#define getopt test_getopt
+#define malloc test_malloc
 #endif
 
 SERVER_ARGUMENT *parse_ser_opt(int argc, char *const argv[])
@@ -188,11 +204,13 @@ int publish(int fd, SERVER_ARGUMENT *server)
     if (current_state == NULL)
     {
         perror("Not able to create sever state");
+        free(fileMetadata->data);
         free(fileMetadata);
         return returnCode;
     }
     if ((unsigned)server->window > WINDOW_MAX || server->window < 1 || server->timeout_ms == 0)
     {
+        free(fileMetadata->data);
         free(fileMetadata);
         return returnCode;
     }
@@ -209,6 +227,7 @@ int publish(int fd, SERVER_ARGUMENT *server)
     if (now < 0 || flush(fd, packets, populate_transmission_window(current_state, now, packets)) != 0)
     {
         free(current_state);
+        free(fileMetadata->data);
         free(fileMetadata);
         return returnCode;
     }
@@ -278,6 +297,7 @@ int publish(int fd, SERVER_ARGUMENT *server)
     {
         returnCode = 0;
     }
+    free(fileMetadata->data);
     free(fileMetadata);
     free(current_state);
 
